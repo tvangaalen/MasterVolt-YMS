@@ -1,82 +1,103 @@
-# Mastervolt project v0.15.1
+# MasterVolt YMS
 
-## Important Engine ECU web-control fix
+**Mastervolt Energy v1.8.10** — a private web app (installable iPhone PWA) that monitors and controls a boat's
+Mastervolt electrical system and its DALY battery management, from a Windows PC on the boat's LAN.
 
-The command-line test for Engine ECU field 43 worked, but the web button did not.
+- **MasterBus** over the Mastervolt USB Link: CombiMaster (shore power, inverter, charger), Solar ChargeMaster,
+  Alpha Pro alternator regulator, Mass chargers, MasterShunts and the Yanmar engine ECU interface.
+- **DALY Bluetooth** for the three house-battery BMS units (`BATTERY 1`–`3`) and the three balancers (`DL-BAL1`–`3`).
+- **FastAPI** backend, single-page frontend in `static/index.html`, SQLite measurement history, local HTTPS.
 
-The cause was found in the web-server startup path.
+Release history: [CHANGELOG.md](CHANGELOG.md). Protocol findings and field maps: [docs/hardware-notes.md](docs/hardware-notes.md).
 
-An older v0.13 feature still ran this logic whenever Uvicorn started:
+## Pages
 
-```text
-rediscover Yanmar field 56 "Power"
-overwrite control_maps["engine_ecu"]
-```
+| Page | What it does |
+|---|---|
+| **Dashboard** | Sources, Storage and Loads tiles with live V/A/W; ON/OFF controls; Motor / Anchor / Sail / Marina modes; shore-power AC limit; `INV` and `SUP`; Engine ECU power with a safety confirmation |
+| **BMS** | Side-by-side House battery matrix: SOC, voltages (3 decimals), cell voltages, temperatures, alarms, MOS state, voltage-derived SOC; Charge/Discharge controls and Set SOC (per battery and all) |
+| **Balance** | Same layout for the three balancers (tap a balancer's column title to refresh only that balancer), plus collapsed raw Bluetooth diagnostics |
+| **History** | Time-range slider and charts for Sources, Storage, Loads and Alarms, served from a server-side cache |
+| **Settings** | Default AC limit, Float protection thresholds, refresh/retry intervals, pop-up durations, history retention |
 
-Therefore:
+Swipe left/right moves between pages on touch devices. A Light UI (for sunlight) and Dark UI are available from the header.
 
-- `ecu_field43_test.py` used the correct verified field 43 mapping and worked;
-- the web server subsequently overwrote that mapping with field 56;
-- the iPhone button then tried the old field-56 write, which we already proved
-  does not control the ECU.
+## Requirements
 
-v0.15.1 removes that startup overwrite.
-
-The Engine ECU web control now remains permanently mapped to the captured and
-hardware-verified MasterAdjust transaction:
-
-```text
-INT Yanmar ECU
-address 3AE394
-field 43 "Mac/Magic On"
-
-OFF = 0.0
-ON  = 1.0
-no commit field
-```
-
-## Verify the mapping before starting
+- Windows with the **Mastervolt USB Link** attached (HID access via `hidapi`) and a Bluetooth adapter for DALY (`bleak`).
+- Python 3.12 or newer (`py` launcher). OpenSSL for the certificate setup (found on `PATH` or in the FireDaemon OpenSSL folder).
+- An iPhone or browser on the same private LAN.
 
 ```powershell
-cd C:\temp\mastervoltproject;
+py -m pip install -r requirements.txt
+```
+
+## Run
+
+**Normal use — HTTPS** (needed for the iPhone PWA):
+
+```powershell
+.\start_mastervolt_server.cmd
+```
+
+This creates or reuses the private *Mastervolt Local CA*, issues a server certificate for localhost, the computer name
+and the current LAN addresses, trusts the CA for the current Windows user, installs `bleak` if missing, and starts
+Uvicorn on `https://<private-LAN-address>:8000`, bound only to that private address. First-time certificate setup for the PC and
+iPhone is in [docs/local-https.md](docs/local-https.md).
+
+**Plain HTTP for development** (binds all interfaces, so use only on a trusted network):
+
+```powershell
+.\run.ps1
+```
+
+The server needs exclusive use of the MasterBus USB Link, so close MasterAdjust and other Python MasterBus tools first.
+
+Before the first start after changing any control code, check the mappings:
+
+```powershell
 py show_control_maps.py
 ```
 
-For `engine_ecu` it must show:
+`engine_ecu` must show `verified True`, address `3AE394`, field `43`.
+
+## Safety model
+
+- Only hardware-verified MasterBus fields are used; nothing is guessed at run time.
+- Engine ECU OFF needs an explicit confirmation whose default is *Keep ECU ON*, and no operating mode ever switches it off.
+- Controls write, then read back and verify; DALY writes are queued through one Bluetooth priority queue, with a pre-change backup written to `backups/`.
+- **High-SOC Float protection** runs on the server every 3 s (default: Float at 95% House SOC, back to Bulk at 90%).
+- The server listens only on a private RFC1918 address (or localhost). Nothing is published to the internet.
+
+## Project layout
 
 ```text
-verified     : True
-address      : 3AE394
-field        : 43
-name         : Mac/Magic On
-protocol     : btm1
-type         : bool
-commit_field : None
+app.py                     FastAPI app, routes, history loop, lifespan
+masterbus_*.py             MasterBus USB protocol, service, control, discovery, registry, presentation
+daly_bms_service.py        DALY BMS Bluetooth (persistent per-battery workers, MOS/SOC control)
+daly_balancer_service.py   DALY balancer Bluetooth (read-only)
+bluetooth_coordinator.py   Process-wide Bluetooth priority queue
+history_service.py         SQLite history and server-side chart cache
+static/                    index.html (SPA), PWA manifest + service worker, icons, cached product photos
+control_maps.json, device_maps.json, mastershunt_config_maps.json   Verified device/control mappings
+schemas/                   Cached MasterBus device schemas
+VERIFIED_FIELD_MAP.txt     Fixed measurement map (see docs/hardware-notes.md for later changes)
+certs/, setup_local_https.ps1, install_*_certificate.cmd            Local HTTPS
+docs/                      Hardware notes, HTTPS guide, archived per-release notes
 ```
 
-## Start server
+Runtime data (not for version control): `data/history.sqlite3`, `backups/`, `captures/*.pcap`, `user_settings.json`,
+`certs/*-key.pem`. See `.gitignore`.
+
+Diagnostic and test scripts (snapshots, discovery, ECU/charger tests, self-checks) are listed in
+[docs/hardware-notes.md](docs/hardware-notes.md#utility-scripts). The quick structural check needs no hardware:
 
 ```powershell
-cd C:\temp\mastervoltproject;
-py -m uvicorn app:app --host 0.0.0.0 --port 8000
+py self_check.py
 ```
 
-If the iPhone has the old PWA cached, close/reopen the Home Screen app or reload
-once in Safari.
+## API
 
-
-## Field audit utility
-
-v0.15.3 adds a dashboard field audit tool that prints the exact field numbers
-currently used by the application, including persisted dynamic mappings from
-`device_maps.json`.
-
-Run:
-
-```powershell
-cd C:\temp\mastervoltproject;
-py field_audit.py
-```
-
-Paste the complete output into ChatGPT if you want to verify or correct any
-mapping.
+Interactive docs are at `/docs` while the server runs. Main endpoints: `GET /api/energy`, `GET|POST /api/settings`,
+`GET /api/bms`, `GET /api/balancers`, `GET /api/bluetooth-coordinator`, `GET /api/history*`, and control routes under
+`/api/control/*` and `/api/bms/*`.

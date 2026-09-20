@@ -1,6 +1,6 @@
 $ErrorActionPreference = "Stop"
 
-$Project = "C:\temp\mastervoltproject"
+$Project = $PSScriptRoot
 $CaptureDir = Join-Path $Project "captures"
 New-Item -ItemType Directory -Force -Path $CaptureDir | Out-Null
 
