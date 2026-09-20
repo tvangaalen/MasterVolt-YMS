@@ -128,7 +128,7 @@ async def lifespan(app):
     try: await asyncio.to_thread(balancer_service.stop)
     except: pass
 
-app=FastAPI(title="Mastervolt Energy",version="1.8.8",lifespan=lifespan)
+app=FastAPI(title="Mastervolt Energy",version="1.8.10",lifespan=lifespan)
 app.add_middleware(GZipMiddleware,minimum_size=1000)
 app.mount("/static",StaticFiles(directory=STATIC),name="static")
 
@@ -230,6 +230,12 @@ def history_export():return StreamingResponse(history_service.json_lines(),media
 
 @app.post("/api/balancers/refresh")
 def refresh_balancers(): return balancer_service.refresh_all()
+
+@app.post("/api/balancers/{balancer_id}/refresh")
+def refresh_one_balancer(balancer_id:int):
+    if balancer_id not in (1,2,3):raise HTTPException(404,detail="Unknown balancer")
+    try:return balancer_service.refresh_one(f"DL-BAL{balancer_id}")
+    except Exception as e:raise HTTPException(503,detail=str(e).strip() or "Balancer refresh unavailable")
 
 @app.post("/api/bms/refresh")
 def refresh_bms(): return bms_service.refresh_all()

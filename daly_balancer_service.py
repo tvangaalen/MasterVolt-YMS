@@ -53,6 +53,7 @@ class DalyBalancerService:
         self.settings_getter=lambda:{"balancer_refresh_interval":30,"balancer_connection_retry_seconds":30}
         self.buffers={name:bytearray() for name in DEVICE_NAMES};self.decoded={name:{} for name in DEVICE_NAMES};self.known_devices={};self.connection_failures={name:0 for name in DEVICE_NAMES}
         self.cycle_cursor=0
+        self.single_queue=[]
         self.refresh_generation=0;self.completed_generation=0
         self.devices={name:{"name":name,"state":"not_read","values":[],"status":{},"error":None,"captured_at":None} for name in DEVICE_NAMES}
 
@@ -69,6 +70,24 @@ class DalyBalancerService:
         self.refresh_generation+=1
         self.refresh_event.set()
         return {"accepted":True,"generation":self.refresh_generation}
+
+    def refresh_one(self,name):
+        """Queue a manual refresh of one balancer; the next cycle reads only that balancer."""
+        if name not in DEVICE_NAMES:raise ValueError("Unknown balancer")
+        if not self.ble_available:raise RuntimeError("Windows Bluetooth component unavailable")
+        with self.lock:
+            if name not in self.single_queue:self.single_queue.append(name)
+            if self.devices[name].get("state") in ("not_read","connected","disconnected","error"):
+                self.devices[name]={**self.devices[name],"state":"queued","error":None}
+        self.refresh_event.set()
+        return {"started":True,"device":name}
+
+    def _requeue_manual(self,names):
+        """Put unfinished manual refreshes back in front so a deferred attempt is retried."""
+        with self.lock:
+            for name in reversed(names):
+                if name not in self.single_queue:self.single_queue.insert(0,name)
+        self.refresh_event.set()
 
     def snapshot(self):
         with self.lock:
@@ -228,16 +247,24 @@ class DalyBalancerService:
                 # Keep the three BMS sessions open, but sample balancers one at
                 # a time. This avoids exceeding the practical Windows adapter
                 # limit with six simultaneous DALY GATT links.
-                rotated=list(DEVICE_NAMES[self.cycle_cursor:]+DEVICE_NAMES[:self.cycle_cursor])
-                cycle_generation=self.refresh_generation;cycle_complete=True
-                self.cycle_cursor=(self.cycle_cursor+1)%len(DEVICE_NAMES)
-                # A device that timed out must not remain disadvantaged in the
-                # third position. Failed devices go first next cycle; healthy
-                # devices rotate so every adapter timing slot is exercised.
-                missing=sorted(
-                    rotated,
-                    key=lambda name:(self.devices[name].get("state")!="error",-self.connection_failures[name]),
-                )
+                with self.lock:manual=[n for n in self.single_queue if n in DEVICE_NAMES];self.single_queue.clear()
+                if manual:
+                    # Manual refresh of clicked balancer(s): they go first and
+                    # nothing else is read in this cycle. It never completes a
+                    # "Refresh all" generation.
+                    cycle_generation=self.refresh_generation;cycle_complete=False
+                    missing=manual
+                else:
+                    rotated=list(DEVICE_NAMES[self.cycle_cursor:]+DEVICE_NAMES[:self.cycle_cursor])
+                    cycle_generation=self.refresh_generation;cycle_complete=True
+                    self.cycle_cursor=(self.cycle_cursor+1)%len(DEVICE_NAMES)
+                    # A device that timed out must not remain disadvantaged in the
+                    # third position. Failed devices go first next cycle; healthy
+                    # devices rotate so every adapter timing slot is exercised.
+                    missing=sorted(
+                        rotated,
+                        key=lambda name:(self.devices[name].get("state")!="error",-self.connection_failures[name]),
+                    )
                 discover_names=[name for name in missing if name not in self.known_devices or self.connection_failures[name]>=2]
                 for name in discover_names:
                     if self.connection_failures[name]>=2:self.known_devices.pop(name,None)
@@ -247,12 +274,15 @@ class DalyBalancerService:
                     try:discovered=await self._discover(discover_names)
                     except BalancerDeferred as exc:
                         for name in discover_names:self._set(name,state="waiting",error=str(exc))
+                        if manual:self._requeue_manual(manual)
                         await asyncio.sleep(1)
                         continue
                     except Exception as exc:
                         for name in discover_names:self._set(name,state="error",error=f"Bluetooth scan failed: {exc}")
                 for name in missing:
                     if self.stop_event.is_set():break
+                    # A manual refresh request overtakes the rest of a running full cycle.
+                    if not manual and self.single_queue:cycle_complete=False;break
                     device=discovered.get(name) or self.known_devices.get(name)
                     try:
                         # One lease covers connect, notifications, read and all
@@ -266,6 +296,7 @@ class DalyBalancerService:
                         await self._disconnect(name)
                         self._set(name,state="queued",error=str(exc))
                         cycle_complete=False
+                        if manual:self._requeue_manual(manual[manual.index(name):])
                         break
                     except Exception as exc:
                         await self._disconnect(name);self.connection_failures[name]+=1
