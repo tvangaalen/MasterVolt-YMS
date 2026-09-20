@@ -96,6 +96,22 @@ Diagnostic and test scripts (snapshots, discovery, ECU/charger tests, self-check
 py self_check.py
 ```
 
+## Battery health report
+
+`battery_health.py` analyses the stored history (read-only, safe while the server runs) and prints a Markdown report:
+a verdict per battery, cell connection resistance, current sharing between the parallel batteries, cell/voltage
+exposure, alarms, Bluetooth reliability, balancers, Start/Bow batteries and usage.
+
+```powershell
+py battery_health.py --project C:\Temp\mastervoltproject                       # print the report
+py battery_health.py --project C:\Temp\mastervoltproject --days 7 --save       # last 7 days, also saved to reports\
+py battery_health.py --project C:\Temp\mastervoltproject --split "2026-09-20 12:40"   # before/after a change you made
+```
+
+`--split` judges the period after the moment you specify (local time), for example after re-tightening a busbar.
+Reports are written to `reports\` and are not committed to git. Thresholds are practical heuristics, not manufacturer
+limits; see the top of the script. `py battery_health_self_test.py` checks the analysis on synthetic data, without hardware.
+
 ## License and disclaimer
 
 Released under the [MIT License](LICENSE). This is an independent project, not affiliated with or endorsed by Mastervolt

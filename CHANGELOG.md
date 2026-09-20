@@ -10,6 +10,10 @@ Unless an entry says otherwise, every release also bumps the application version
 
 ---
 
+## Unreleased
+
+- Added **`battery_health.py`**, a read-only battery health report built on the stored measurement history: verdict per battery, per-cell connection resistance from load steps, current sharing between the parallel batteries, cell/voltage exposure, alarms and MOSFET episodes (separating your own switching from BMS protection), Bluetooth gaps, cycle counters, balancers, Start/Bow batteries and usage. `--split` compares the periods before and after a change (for example a re-tightened busbar). Includes `battery_health_self_test.py` (synthetic data, no hardware). Reports go to `reports/`, which is git-ignored.
+
 ## 1.8 — History range and polish
 
 ### 1.8.10
