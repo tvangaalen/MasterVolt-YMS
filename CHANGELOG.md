@@ -12,6 +12,9 @@ Unless an entry says otherwise, every release also bumps the application version
 
 ## 1.9 — Reports
 
+### 1.9.1
+- History charts: when a legend item is selected to filter a stacked chart, the **smooth line** is now still drawn, following the filtered data (previously it only appeared in the *Total* view). Applies to the Remaining, Load, Sources and Loads charts; the dashed average line is unchanged.
+
 ### 1.9.0
 - New **Reports** tab on the History page with a **Battery health report** button. It asks how many days of data to analyse (1–365, default 7), runs the analysis on the server and shows the result on the page: verdict per battery, cell connection resistance, current sharing, alarms, balancers and usage. The status labels are colour-coded (OK / ATTENTION / CRITICAL) and wide tables scroll sideways on a phone.
 - The analysis runs in a separate low-priority process (`report_service.py`), so it cannot slow down the Bluetooth/MasterBus threads or Float protection. Only one report runs at a time; the latest result is kept in memory until the server restarts and is shown again when the tab is reopened. New endpoints: `POST /api/reports/battery-health` (body `{"days": N}`) and `GET /api/reports/battery-health`.
