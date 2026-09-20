@@ -49,6 +49,15 @@ Every user-visible change bumps the version in **all three places** and adds a `
 
 Also update the version line at the top of `README.md`. Do not recreate per-release `README_*.md` / `CHANGELOG_v*.md` files; those live in `docs/archive/` for history only.
 
+## Version control
+
+- Git 2.55 (installed via winget; it may not be on the PATH of an already-open shell — use `C:\Program Files\Git\cmd\git.exe`). Branch `main`, repo-local identity set.
+- The repository data lives **outside Google Drive** at `C:\Users\TvanG\.gitrepos\MasterVolt-YMS.git`; the project folder only holds a `.git` pointer file. Never move or delete that folder, and never run `git init` again in the project.
+- History: `v1.8.8` = the original zip as delivered; then the docs consolidation; then `v1.8.10`. Tag each release (`git tag -a vX.Y.Z`) on the commit that bumps the version.
+- Commit code and docs changes separately. Commit messages: imperative summary line, then what and why. Do not commit runtime data, certificates/keys, backups, captures or `user_settings.json` (see `.gitignore`); check `git status` before `git add -A`.
+- There is no remote yet. Do not create or push to one (GitHub etc.) unless the user asks: the repo contains hardware protocol details of the boat's electrical system.
+- The live folder `C:\Temp\mastervoltproject` is **not** a git repository. Commit in the source folder first, then deploy the changed files.
+
 ## Two folders: source vs live
 
 - `G:\My Drive\Claude\MasterVolt-YMS` (Google Drive) is the **source** copy. Do not run the server from it: it holds only a stale snapshot of runtime state, and a large SQLite history should not live on Drive.
@@ -62,4 +71,3 @@ Also update the version line at the top of `README.md`. Do not recreate per-rele
 - `run.ps1` binds `0.0.0.0` over plain HTTP; `start_mastervolt_server.cmd` is the HTTPS, private-address launcher.
 - `VERIFIED_FIELD_MAP.txt` is the v0.17 map; `docs/hardware-notes.md` lists what changed since (e.g. Solar voltage is now field 6, House SOC is the DALY average).
 - Alternator ON currently only clears Stop Charge (field 39 = 0 + commit 40) and expects the Alpha Pro to resume by itself — no Bulk request is sent.
-- This folder has no git repository yet (git is not installed on this machine).
