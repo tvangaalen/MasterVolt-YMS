@@ -96,6 +96,13 @@ Diagnostic and test scripts (snapshots, discovery, ECU/charger tests, self-check
 py self_check.py
 ```
 
+## License and disclaimer
+
+Released under the [MIT License](LICENSE). This is an independent project, not affiliated with or endorsed by Mastervolt
+or DALY; product names belong to their owners. It sends commands to real electrical equipment (chargers, inverter,
+alternator regulator, engine ECU, battery MOSFETs) using reverse-engineered protocols. Use it at your own risk and verify
+every control on your own installation.
+
 ## API
 
 Interactive docs are at `/docs` while the server runs. Main endpoints: `GET /api/energy`, `GET|POST /api/settings`,

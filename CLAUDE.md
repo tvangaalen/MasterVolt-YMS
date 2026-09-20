@@ -57,7 +57,8 @@ Also update the version line at the top of `README.md`. Do not recreate per-rele
 - Commit code and docs changes separately. Commit messages: imperative summary line, then what and why. Do not commit runtime data, certificates/keys, backups, captures or `user_settings.json` (see `.gitignore`); check `git status` before `git add -A`.
 - Remote: `origin` = https://github.com/tvangaalen/MasterVolt-YMS (**public**, `main` plus the `v*` tags). Push only when the user asks or after they approved a release; never force-push or rewrite pushed history. Everything committed is public, so re-check `git status` and the staged diff for keys, certificates, settings, hardware serials and personal data before every push.
 - GitHub CLI (`gh`, per-user winget install; path `C:\Users\TvanG\AppData\Local\Microsoft\WinGet\Packages\GitHub.cli_Microsoft.Winget.Source_8wekyb3d8bbwe\bin\gh.exe`) is signed in as `tvangaalen`. This repo's local `credential.helper` points at it, so plain `git push` works from the project folder. Auth changes and account settings are the user's to make.
-- No LICENSE file yet: as it stands, all rights are reserved. Ask the user before adding one.
+- License: MIT (`LICENSE`, copyright holder "TvanG"). Do not change the license or copyright holder without asking.
+- **Keep the user's real email out of git.** Commits use the GitHub no-reply address (set as this repo's local `user.email`); never put the user's personal or company email address, or other personal data, in commits, files or tags.
 - The live folder `C:\Temp\mastervoltproject` is **not** a git repository. Commit in the source folder first, then deploy the changed files.
 
 ## Two folders: source vs live
