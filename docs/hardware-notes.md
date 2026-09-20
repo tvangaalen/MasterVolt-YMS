@@ -130,7 +130,7 @@ All are run from the project folder with `py <script>`. Scripts marked **writes*
 |---|---|
 | `self_check.py` | Structural regression check of `MasterBusService` / `ControlDiscovery` (no hardware) |
 | `bms_control_self_test.py`, `bluetooth_connection_self_test.py` | Non-hardware checks of DALY MOS control and failure-isolated workers |
-| `battery_health.py` | Read-only battery health report from the stored history (verdict per battery, cell resistance, current sharing, alarms, balancers); `--split` compares before/after a change. Self-test: `battery_health_self_test.py` |
+| `battery_health.py` | Read-only battery health report from the stored history (verdict per battery, cell resistance, current sharing, alarms, balancers); `--split` compares before/after a change; also available in the app under History → Reports. Self-tests: `battery_health_self_test.py`, `report_service_self_test.py` |
 | `show_control_maps.py` | Print the active control mappings (check `engine_ecu` before starting) |
 | `field_audit.py` | Print every field number the app currently uses, including persisted `device_maps.json` |
 | `masterbus_snapshot.py --device <addr> --all-fields` | Read-only field snapshot of a device (uses the known `max_index`; `--max-index N` overrides) |

@@ -19,14 +19,14 @@ HOURS, FIX_H = 48, 24
 T0 = datetime(2026, 9, 10, 0, 0, tzinfo=timezone.utc)
 
 
-def build(path):
+def build(path, t0=T0):
     con = sqlite3.connect(path)
     con.execute("create table measurements (id integer primary key, captured_at text not null, source text not null, device text, payload text not null)")
     rnd = random.Random(1)
     rows = []
     bank = 6.0
     for step in range(HOURS * 120):
-        t = T0 + timedelta(seconds=30 * step)
+        t = t0 + timedelta(seconds=30 * step)
         h = step / 120
         iso = t.isoformat()
         if step % 20 == 0:                       # the bank load changes every 10 minutes (real load steps)

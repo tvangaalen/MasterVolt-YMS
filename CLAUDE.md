@@ -17,6 +17,7 @@ script table: `docs/hardware-notes.md`. Read the hardware notes before touching 
 - Keep everything on a private LAN: the server binds only to an RFC1918 address or localhost. Never bind a public interface or add cloud/tunnel dependencies.
 - Never commit or print `certs/*-key.pem`, `user_settings.json`, `backups/`, `data/*.sqlite3`, `captures/*.pcap` or generated `reports/` (all in `.gitignore`).
 - `battery_health.py` only reads the history database (opened `mode=ro`) and the BMS backups; keep it that way. Never point analysis tools at the live database with anything but a read-only connection.
+- The Reports tab runs `battery_health.py` through `report_service.py` in a **separate low-priority process**. Do not import it into the server process or run analyses in a server thread: the GIL would slow the MasterBus/Bluetooth threads and Float protection. Deploying the Reports tab means copying `app.py`, `report_service.py`, `battery_health.py`, `static/index.html` and `static/service-worker.js` to the live folder.
 
 ## Verifying changes
 
@@ -27,6 +28,7 @@ py self_check.py                       # structure of MasterBusService / Control
 py bms_control_self_test.py            # DALY MOS control logic
 py bluetooth_connection_self_test.py   # failure-isolated Bluetooth workers
 py battery_health_self_test.py         # battery_health.py analysis on synthetic data
+py report_service_self_test.py         # Reports-tab job runner (separate process, one at a time, errors, timeout)
 ```
 
 `self_check.py` fails if a method is accidentally nested or removed (this happened twice — see changelog 0.13.1/0.13.2), so run it after any edit to `masterbus_service.py` or `masterbus_control_discovery.py`. For frontend edits, syntax-check the JavaScript in `static/index.html`. The frontend is a single ~150 KB file with inline JS/CSS.

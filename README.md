@@ -1,6 +1,6 @@
 # MasterVolt YMS
 
-**Mastervolt Energy v1.8.10** — a private web app (installable iPhone PWA) that monitors and controls a boat's
+**Mastervolt Energy v1.9.0** — a private web app (installable iPhone PWA) that monitors and controls a boat's
 Mastervolt electrical system and its DALY battery management, from a Windows PC on the boat's LAN.
 
 - **MasterBus** over the Mastervolt USB Link: CombiMaster (shore power, inverter, charger), Solar ChargeMaster,
@@ -17,7 +17,7 @@ Release history: [CHANGELOG.md](CHANGELOG.md). Protocol findings and field maps:
 | **Dashboard** | Sources, Storage and Loads tiles with live V/A/W; ON/OFF controls; Motor / Anchor / Sail / Marina modes; shore-power AC limit; `INV` and `SUP`; Engine ECU power with a safety confirmation |
 | **BMS** | Side-by-side House battery matrix: SOC, voltages (3 decimals), cell voltages, temperatures, alarms, MOS state, voltage-derived SOC; Charge/Discharge controls and Set SOC (per battery and all) |
 | **Balance** | Same layout for the three balancers (tap a balancer's column title to refresh only that balancer), plus collapsed raw Bluetooth diagnostics |
-| **History** | Time-range slider and charts for Sources, Storage, Loads and Alarms, served from a server-side cache |
+| **History** | Time-range slider and charts for Sources, Storage, Loads and Alarms, served from a server-side cache; a **Reports** tab with the battery health report (asks for the number of days, runs it on the server, shows the result) |
 | **Settings** | Default AC limit, Float protection thresholds, refresh/retry intervals, pop-up durations, history retention |
 
 Swipe left/right moves between pages on touch devices. A Light UI (for sunlight) and Dark UI are available from the header.
@@ -73,6 +73,8 @@ py show_control_maps.py
 
 ```text
 app.py                     FastAPI app, routes, history loop, lifespan
+report_service.py          Runs battery_health.py in a separate low-priority process for the Reports tab
+battery_health.py          Battery health report (also a command-line tool)
 masterbus_*.py             MasterBus USB protocol, service, control, discovery, registry, presentation
 daly_bms_service.py        DALY BMS Bluetooth (persistent per-battery workers, MOS/SOC control)
 daly_balancer_service.py   DALY balancer Bluetooth (read-only)
@@ -98,7 +100,7 @@ py self_check.py
 
 ## Battery health report
 
-`battery_health.py` analyses the stored history (read-only, safe while the server runs) and prints a Markdown report:
+In the app: **History → Reports → Battery health report**. From the command line, `battery_health.py` analyses the stored history (read-only, safe while the server runs) and prints a Markdown report:
 a verdict per battery, cell connection resistance, current sharing between the parallel batteries, cell/voltage
 exposure, alarms, Bluetooth reliability, balancers, Start/Bow batteries and usage.
 

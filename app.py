@@ -11,6 +11,7 @@ from daly_bms_service import DalyBmsService
 from daly_balancer_service import DalyBalancerService
 from history_service import HistoryService
 from bluetooth_coordinator import bluetooth_coordinator
+from report_service import BatteryHealthReports
 
 BASE=Path(__file__).resolve().parent
 STATIC=BASE/"static"
@@ -19,6 +20,7 @@ service=MasterBusService()
 bms_service=DalyBmsService()
 balancer_service=DalyBalancerService()
 history_service=HistoryService(BASE/"data"/"history.sqlite3")
+battery_reports=BatteryHealthReports(BASE)
 history_stop=threading.Event()
 
 def _history_loop():
@@ -128,7 +130,7 @@ async def lifespan(app):
     try: await asyncio.to_thread(balancer_service.stop)
     except: pass
 
-app=FastAPI(title="Mastervolt Energy",version="1.8.10",lifespan=lifespan)
+app=FastAPI(title="Mastervolt Energy",version="1.9.0",lifespan=lifespan)
 app.add_middleware(GZipMiddleware,minimum_size=1000)
 app.mount("/static",StaticFiles(directory=STATIC),name="static")
 
@@ -227,6 +229,16 @@ def update_history_chart_data(hours:float|None=None):return _chart_data(hours,Tr
 
 @app.get("/api/history/export")
 def history_export():return StreamingResponse(history_service.json_lines(),media_type="application/x-ndjson",headers={"Content-Disposition":"attachment; filename=mastervolt-history.jsonl"})
+
+class ReportReq(BaseModel): days:int=Field(ge=1,le=365)
+
+@app.post("/api/reports/battery-health")
+def start_battery_report(req:ReportReq):
+    try:return battery_reports.start(req.days)
+    except RuntimeError as e:raise HTTPException(409,detail=str(e))
+
+@app.get("/api/reports/battery-health")
+def battery_report_status(): return battery_reports.status()
 
 @app.post("/api/balancers/refresh")
 def refresh_balancers(): return balancer_service.refresh_all()
