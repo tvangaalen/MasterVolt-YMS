@@ -1,0 +1,289 @@
+"""Read-only Bluetooth discovery and monitoring for DALY active balancers."""
+
+from __future__ import annotations
+
+import asyncio
+import importlib.util
+import threading
+import time
+from datetime import datetime, timezone
+from daly_bms_service import decode,decode_alarm_bytes
+from bluetooth_coordinator import bluetooth_coordinator
+
+DEVICE_NAMES=("DL-BAL1","DL-BAL2","DL-BAL3")
+NOTIFY_UUID="0000fff1-0000-1000-8000-00805f9b34fb"
+WRITE_UUID="0000fff2-0000-1000-8000-00805f9b34fb"
+STANDARD_NAMES={
+    "00002a19-0000-1000-8000-00805f9b34fb":"Battery level",
+    "00002a24-0000-1000-8000-00805f9b34fb":"Model number",
+    "00002a25-0000-1000-8000-00805f9b34fb":"Serial number",
+    "00002a26-0000-1000-8000-00805f9b34fb":"Firmware revision",
+    "00002a27-0000-1000-8000-00805f9b34fb":"Hardware revision",
+    "00002a29-0000-1000-8000-00805f9b34fb":"Manufacturer",
+}
+
+class BalancerDeferred(RuntimeError):
+    """Balancer work intentionally postponed while the BMS has radio priority."""
+
+def describe_value(raw:bytes):
+    raw=bytes(raw)
+    text=None
+    try:
+        decoded=raw.decode("utf-8").strip("\0\r\n ")
+        if decoded and all(ch.isprintable() for ch in decoded):text=decoded
+    except UnicodeDecodeError:
+        pass
+    return {
+        "hex":raw.hex(" ").upper(),
+        "text":text,
+        "unsigned_le":int.from_bytes(raw,"little") if 0<len(raw)<=8 else None,
+        "length":len(raw),
+    }
+
+def status_request(command:int)->bytes:
+    """Build a DALY legacy read request; these commands do not change settings."""
+    frame=bytearray((0xA5,0x40,command,0x08,0,0,0,0,0,0,0,0));frame.append(sum(frame)&0xFF);return bytes(frame)
+
+class DalyBalancerService:
+    """Keep three balancer links open and expose every readable/notified GATT value."""
+
+    def __init__(self):
+        self.lock=threading.RLock();self.stop_event=threading.Event();self.refresh_event=threading.Event()
+        self.thread=None;self.loop=None;self.clients={};self.ble_available=importlib.util.find_spec("bleak") is not None
+        self.settings_getter=lambda:{"balancer_refresh_interval":30,"balancer_connection_retry_seconds":30}
+        self.buffers={name:bytearray() for name in DEVICE_NAMES};self.decoded={name:{} for name in DEVICE_NAMES};self.known_devices={};self.connection_failures={name:0 for name in DEVICE_NAMES}
+        self.cycle_cursor=0
+        self.refresh_generation=0;self.completed_generation=0
+        self.devices={name:{"name":name,"state":"not_read","values":[],"status":{},"error":None,"captured_at":None} for name in DEVICE_NAMES}
+
+    def start(self,settings_getter=None):
+        if self.thread and self.thread.is_alive():return
+        if settings_getter:self.settings_getter=settings_getter
+        self.stop_event.clear();self.thread=threading.Thread(target=self._thread_main,daemon=True,name="daly-balancers");self.thread.start()
+
+    def stop(self):
+        self.stop_event.set();self.refresh_event.set()
+        if self.thread:self.thread.join(timeout=8)
+
+    def refresh_all(self):
+        self.refresh_generation+=1
+        self.refresh_event.set()
+        return {"accepted":True,"generation":self.refresh_generation}
+
+    def snapshot(self):
+        with self.lock:
+            return {"ble_available":self.ble_available,"persistent_connections":False,"connection_mode":"sequential-read-disconnect","shared_discovery":True,
+                "busy":self.completed_generation<self.refresh_generation,
+                "refresh_generation":self.refresh_generation,"completed_generation":self.completed_generation,
+                "refresh_interval_seconds":int(self.settings_getter()["balancer_refresh_interval"]),
+                "retry_interval_seconds":int(self.settings_getter()["balancer_connection_retry_seconds"]),"coordinator":bluetooth_coordinator.snapshot(),
+                "devices":{k:{**v,"connection_failures":self.connection_failures[k],"values":[dict(x) for x in v.get("values",[])]} for k,v in self.devices.items()}}
+
+    def _set(self,name,**updates):
+        with self.lock:self.devices[name]={**self.devices[name],**updates}
+
+    def _thread_main(self):
+        if not self.ble_available:
+            for name in DEVICE_NAMES:self._set(name,state="error",error="Windows Bluetooth component unavailable")
+            return
+        try:asyncio.run(self._run())
+        except Exception as exc:
+            for name in DEVICE_NAMES:self._set(name,state="error",error=str(exc))
+
+    async def _discover(self,names):
+        """Find every missing balancer in one radio scan instead of three competing scans."""
+        from bleak import BleakScanner
+        if not names:return {}
+        with bluetooth_coordinator.lease("balancer",timeout=3) as granted:
+            if not granted:raise BalancerDeferred("Waiting for BMS connection priority")
+            records=await BleakScanner.discover(timeout=12,return_adv=True)
+        pairs=records.values() if isinstance(records,dict) else records
+        matches={}
+        for device,advertisement in pairs:
+            visible=(getattr(advertisement,"local_name",None) or getattr(device,"name",None) or "")
+            for name in names:
+                if name.casefold() in visible.casefold():matches.setdefault(name,device)
+        return matches
+
+    async def _disconnect(self,name,client=None):
+        target=client or self.clients.pop(name,None)
+        if target:
+            try:await asyncio.wait_for(target.disconnect(),timeout=4)
+            except BaseException:pass
+
+    async def _connect(self,name,device):
+        from bleak import BleakClient
+        self._set(name,state="scanning",error=None)
+        if not device:raise RuntimeError(f"{name} not found; retrying automatically")
+        self.known_devices[name]=device
+        self._set(name,state="connecting")
+        def disconnected(disconnected_client,n=name):
+            # A deliberate read-complete disconnect pops the client first and
+            # must not replace the successful snapshot with an error state.
+            if self.clients.get(n) is disconnected_client:
+                self.clients.pop(n,None)
+                self._set(n,state="disconnected",error="Bluetooth connection lost; retrying automatically")
+        client=BleakClient(device,timeout=15,disconnected_callback=disconnected)
+        try:
+            await asyncio.wait_for(client.connect(),timeout=18)
+            await asyncio.wait_for(client.start_notify(NOTIFY_UUID,lambda sender,data,n=name:self._notification(n,sender,data)),timeout=7)
+        except BaseException:
+            await self._disconnect(name,client)
+            raise
+        self.clients[name]=client;self.connection_failures[name]=0
+        self._set(name,state="connected",error=None)
+
+    def _notification(self,name,sender,data):
+        uuid=str(getattr(sender,"uuid",sender)).lower();value=describe_value(data)
+        with self.lock:
+            rows=self.devices[name].get("values",[]);found=False
+            for row in rows:
+                if row.get("uuid")==uuid:
+                    frames=list(row.get("frames_hex",[]));frames.append(value["hex"]);row.update(value);row["frames_hex"]=frames[-50:];row["source"]="notification";found=True;break
+            if not found:rows.append({"service":"—","uuid":uuid,"label":STANDARD_NAMES.get(uuid,"Unknown characteristic"),"properties":["notify"],"source":"notification","frames_hex":[value["hex"]],**value})
+            self.devices[name]["captured_at"]=datetime.now(timezone.utc).isoformat()
+        if uuid==NOTIFY_UUID:self._consume_frames(name,data)
+
+    def _consume_frames(self,name,data):
+        """Reassemble 13-byte DALY UART frames and derive read-only status."""
+        buffer=self.buffers[name];buffer.extend(data)
+        while len(buffer)>=13:
+            start=buffer.find(b"\xA5")
+            if start<0:buffer.clear();return
+            if start:del buffer[:start]
+            if len(buffer)<13:return
+            frame=bytes(buffer[:13]);del buffer[:13]
+            if frame[3]!=8 or (sum(frame[:12])&0xFF)!=frame[12]:continue
+            command,values=decode(frame)
+            # Standalone DALY balancers reuse byte 3 of the 0x93 payload for
+            # balance current in 0.01 A. Live frames 0x55 and 0x32 therefore
+            # represent 0.85 A and 0.50 A. Do not use 0x90 here: that field is
+            # pack current and legitimately remains zero while balancing.
+            if command==0x93:values["balance_current_a"]=frame[7]/100
+            with self.lock:self.decoded[name].setdefault(command,[]).append(values);self.decoded[name][command]=self.decoded[name][command][-16:]
+            self._update_status(name)
+
+    def _update_status(self,name):
+        groups=self.decoded[name];summary=(groups.get(0x90) or [{}])[-1];limits=(groups.get(0x91) or [{}])[-1];temps=(groups.get(0x92) or [{}])[-1];activity=(groups.get(0x93) or [{}])[-1];meta=(groups.get(0x94) or [{}])[-1];balance=(groups.get(0x97) or [{}])[-1];alarm=(groups.get(0x98) or [{}])[-1]
+        cell_count=meta.get("cell_count",0);cells=[]
+        for group in sorted(groups.get(0x95,[]),key=lambda item:item.get("frame_number",0)):cells.extend(group.get("cell_voltages_mv",[]))
+        if cell_count:cells=cells[:cell_count]
+        temperatures=[]
+        for group in sorted(groups.get(0x96,[]),key=lambda item:item.get("frame_number",0)):temperatures.extend(group.get("temperatures_c",[]))
+        sensor_count=meta.get("temperature_sensor_count",0)
+        if sensor_count:temperatures=temperatures[-sensor_count:]
+        high=limits.get("highest_cell_mv");low=limits.get("lowest_cell_mv")
+        if cells:high=max(cells);low=min(cells)
+        balancing=[n for n in balance.get("balancing_cells",[]) if not cell_count or n<=cell_count]
+        status={
+            "balance_active":bool(balancing),"balance_position":balancing,
+            "reported_current_a":activity.get("balance_current_a"),"pack_voltage_v":summary.get("pack_voltage_v"),
+            "highest_cell_mv":high,"lowest_cell_mv":low,
+            "average_cell_mv":sum(cells)/len(cells) if cells else None,
+            "cell_delta_mv":high-low if high is not None and low is not None else None,
+            "cells_mv":cells,"temperatures_c":temperatures,
+            "cell_count":cell_count or len(cells) or None,"cycles":meta.get("charge_discharge_cycles"),
+            "alarms":decode_alarm_bytes(alarm.get("alarm_bytes_hex","")),
+            "valid_frame_count":sum(len(items) for items in groups.values()),
+        }
+        with self.lock:self.devices[name]["status"]=status;self.devices[name]["captured_at"]=datetime.now(timezone.utc).isoformat()
+
+    async def _read(self,name):
+        client=self.clients[name];rows=[]
+        for service in client.services:
+            for char in service.characteristics:
+                properties=list(char.properties);base={"service":str(service.uuid).lower(),"uuid":str(char.uuid).lower(),"label":STANDARD_NAMES.get(str(char.uuid).lower(),char.description or "Unknown characteristic"),"properties":properties}
+                if "read" in properties:
+                    try:rows.append({**base,"source":"read",**describe_value(await client.read_gatt_char(char))})
+                    except Exception as exc:rows.append({**base,"source":"read error","hex":"","text":None,"unsigned_le":None,"length":0,"error":str(exc)})
+                elif "notify" in properties or "indicate" in properties:
+                    rows.append({**base,"source":"waiting for notification","hex":"","text":None,"unsigned_le":None,"length":0})
+                else:
+                    rows.append({**base,"source":"not readable","hex":"","text":None,"unsigned_le":None,"length":0})
+        self._set(name,state="connected",values=rows,error=None,captured_at=datetime.now(timezone.utc).isoformat())
+        # The FFF1 data channel stays silent until the app requests status.
+        # Probe only DALY's documented read range; never send configuration writes.
+        if any(str(char.uuid).lower()==WRITE_UUID for service in client.services for char in service.characteristics):
+            self.buffers[name].clear();self.decoded[name]={}
+            for command in range(0x90,0x99):
+                await client.write_gatt_char(WRITE_UUID,status_request(command),response=False)
+                await asyncio.sleep(.15)
+            await asyncio.sleep(.8)
+
+    async def _disconnect_all(self):
+        for name in list(self.clients):await self._disconnect(name)
+
+    async def _run(self):
+        # Let the three safety-critical BMS links settle before adding balancers.
+        await asyncio.sleep(8)
+        try:
+            while not self.stop_event.is_set():
+                if not bluetooth_coordinator.bms_ready():
+                    for name in DEVICE_NAMES:
+                        self._set(name,state="waiting",error="Waiting for all BMS connections and initial readings")
+                    await asyncio.sleep(1)
+                    continue
+                for name in DEVICE_NAMES:
+                    if self.devices[name].get("state")=="waiting":self._set(name,state="queued",error=None)
+                # Keep the three BMS sessions open, but sample balancers one at
+                # a time. This avoids exceeding the practical Windows adapter
+                # limit with six simultaneous DALY GATT links.
+                rotated=list(DEVICE_NAMES[self.cycle_cursor:]+DEVICE_NAMES[:self.cycle_cursor])
+                cycle_generation=self.refresh_generation;cycle_complete=True
+                self.cycle_cursor=(self.cycle_cursor+1)%len(DEVICE_NAMES)
+                # A device that timed out must not remain disadvantaged in the
+                # third position. Failed devices go first next cycle; healthy
+                # devices rotate so every adapter timing slot is exercised.
+                missing=sorted(
+                    rotated,
+                    key=lambda name:(self.devices[name].get("state")!="error",-self.connection_failures[name]),
+                )
+                discover_names=[name for name in missing if name not in self.known_devices or self.connection_failures[name]>=2]
+                for name in discover_names:
+                    if self.connection_failures[name]>=2:self.known_devices.pop(name,None)
+                    self._set(name,state="scanning",error=None)
+                discovered={}
+                if discover_names:
+                    try:discovered=await self._discover(discover_names)
+                    except BalancerDeferred as exc:
+                        for name in discover_names:self._set(name,state="waiting",error=str(exc))
+                        await asyncio.sleep(1)
+                        continue
+                    except Exception as exc:
+                        for name in discover_names:self._set(name,state="error",error=f"Bluetooth scan failed: {exc}")
+                for name in missing:
+                    if self.stop_event.is_set():break
+                    device=discovered.get(name) or self.known_devices.get(name)
+                    try:
+                        # One lease covers connect, notifications, read and all
+                        # request frames. A BMS operation can no longer slip in
+                        # between connect and read and leave a stale wait state.
+                        with bluetooth_coordinator.lease("balancer",timeout=8) as granted:
+                            if not granted:raise BalancerDeferred("Queued for Bluetooth radio")
+                            await self._connect(name,device)
+                            await self._read(name)
+                    except BalancerDeferred as exc:
+                        await self._disconnect(name)
+                        self._set(name,state="queued",error=str(exc))
+                        cycle_complete=False
+                        break
+                    except Exception as exc:
+                        await self._disconnect(name);self.connection_failures[name]+=1
+                        if self.connection_failures[name]>=2:self.known_devices.pop(name,None)
+                        message=str(exc).strip() or f"{name} connection timed out; retrying automatically"
+                        self._set(name,state="error",error=message)
+                    finally:
+                        await self._disconnect(name)
+                    # Windows frequently releases a completed GATT connection
+                    # asynchronously. Four seconds prevents the next balancer
+                    # from colliding with that controller cleanup.
+                    await asyncio.sleep(4)
+                if cycle_complete:self.completed_generation=max(self.completed_generation,cycle_generation)
+                settings=self.settings_getter();failed=any(self.devices[name].get("state")=="error" for name in DEVICE_NAMES)
+                delay=int(settings["balancer_connection_retry_seconds"] if failed else settings["balancer_refresh_interval"])
+                for _ in range(max(1,delay*2)):
+                    if self.stop_event.is_set() or self.refresh_event.is_set():break
+                    await asyncio.sleep(.5)
+                if self.refresh_generation<=self.completed_generation:self.refresh_event.clear()
+        finally:
+            await self._disconnect_all()

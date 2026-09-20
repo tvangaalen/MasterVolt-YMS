@@ -1,0 +1,27 @@
+{
+  "solar": {
+    "voltage": 4,
+    "current": 5,
+    "power": 4
+  },
+  "alternator": {
+    "voltage": 6,
+    "current": 21,
+    "power": 5
+  },
+  "yanmar": {
+    "voltage": 6,
+    "current": 7,
+    "power": 22
+  },
+  "charger_start": {
+    "voltage": 6,
+    "current": 7,
+    "power": 1
+  },
+  "charger_bow": {
+    "voltage": 6,
+    "current": 7,
+    "power": 1
+  }
+}
