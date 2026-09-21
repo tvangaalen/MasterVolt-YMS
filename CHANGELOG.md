@@ -10,6 +10,19 @@ Unless an entry says otherwise, every release also bumps the application version
 
 ---
 
+## 1.11 — History totals
+
+### 1.11.0
+- **Donut charts with totals over the selected period** on the History page, each placed under the chart it summarises, with the sum of all contributions in the centre and as a total row:
+  - **Sources → Source contribution** (under *Charge current*): energy delivered by Charger House, Alternator and Solar, with each source's average power in watts.
+  - **Storage → Battery contribution** (under *Charge/discharge*): energy each battery supplied (discharged), its average power, and the energy it took in while charging.
+  - **Loads → Total per Consumer** (under *DC load current*): energy used per DC consumer, with average power.
+  - **Alarms → Total per Battery** (under *Alarm occurrences*): number of alarms (runs of consecutive alarm samples) per battery, with the alarm sample count.
+  Each card also says how much of the selected period is covered by recorded data (server or Bluetooth downtime is not counted).
+- The totals are calculated **on the server from the full-resolution history** (new `GET /api/history/contributions?start=&end=`), not from the sampled chart data, so they stay accurate for short periods. Energy is the time integral of power between samples; whole finished hours are remembered, so a request costs a few milliseconds after the first one. Battery power is the sum of the cell voltages times the current.
+- **Fix:** the red/blue *highest/lowest cell* dots on the BMS and Balance pages were shown at the far left of the table instead of next to the cell they belong to. This was a regression from the 1.10.0 CSS cleanup, which left `.voltage-cell` without its positioning rule in the dark theme.
+- **BMS House:** the voltage in the *Battery 1–3* tiles at the top now shows 2 decimals (the table below keeps 3).
+
 ## 1.10 — History usability
 
 ### 1.10.0

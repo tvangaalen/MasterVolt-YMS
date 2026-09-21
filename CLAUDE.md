@@ -29,9 +29,12 @@ py bms_control_self_test.py            # DALY MOS control logic
 py bluetooth_connection_self_test.py   # failure-isolated Bluetooth workers
 py battery_health_self_test.py         # battery_health.py analysis on synthetic data
 py report_service_self_test.py         # Reports-tab job runner (separate process, one at a time, errors, timeout)
+py history_service_self_test.py        # History pie totals (HistoryService.contributions): energy, gaps, alarms, hourly totals
 ```
 
 `self_check.py` fails if a method is accidentally nested or removed (this happened twice — see changelog 0.13.1/0.13.2), so run it after any edit to `masterbus_service.py` or `masterbus_control_discovery.py`. For frontend edits, syntax-check the JavaScript in `static/index.html`. The frontend is a single ~150 KB file with inline JS/CSS.
+
+**CSS edits:** the stylesheet is a few very long lines. When removing or rewriting rules with a script, remove the *whole* rule including its selector prefix (for example `html[data-theme="light"] .x{…}`), then compare the set of rules before and after (parse `selector{declarations}` from `<style>` in the old and new file) and confirm only the intended rules changed. A dangling prefix once silently turned `.voltage-cell{position:relative}` into a light-theme-only rule and moved the cell dots (changelog 1.11.0).
 
 Delete `__pycache__` folders after running Python here; the project lives in Google Drive.
 
@@ -40,6 +43,7 @@ Delete `__pycache__` folders after running Python here; the project lives in Goo
 - Python 3.12+, Windows, PowerShell. `py` launcher, not `python`. Paths must not be hardcoded (`$PSScriptRoot`, `Path(__file__)`).
 - Match the surrounding style. `app.py` and the service modules use a dense style (semicolons, terse names) — don't reformat existing code.
 - **iPhone touch rules for the frontend.** The pages switch on a horizontal swipe (handler near the end of `index.html`). Any control that is dragged or scrolled sideways (sliders, scrollable tables, carousels) must be an `input`/`select`/`textarea` or sit inside an element with class `no-swipe`, otherwise dragging it changes page. Touch targets should be at least ~40 px. The browser preview cannot drag range inputs in its mobile emulation (it sends mouse events); check them at desktop width and test the swipe guard with dispatched `TouchEvent`s.
+- History totals (the donut charts) come from `HistoryService.contributions()` on the server, which integrates the full-resolution in-memory caches. The chart data sent to the browser is a *sample* (2,500 dashboard points, 1,200 per battery) meant for drawing only: never add up totals from it in the browser. Keep the calculation light (hourly totals are memoised; no per-request loops over the whole history).
 - Stacked History charts are drawn as areas by `drawStackedHistoryChart` (with `smoothPoints`), not as bars: no per-bar gaps or alpha, so no stripes. Keep bands opaque on the offscreen layer and composite once.
 - New MasterBus/DALY behaviour goes through the existing service classes (`MasterBusService`, `DalyBmsService`, `DalyBalancerService`) and the shared `io_lock` / Bluetooth coordinator. Never open a second HID or BLE connection from a new code path.
 - Bluetooth work must go through `bluetooth_coordinator.py` using the existing priority order (user controls > manual refresh > auto reconnect > auto reads > balancers). Per-battery workers are failure-isolated; keep them so.

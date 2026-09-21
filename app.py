@@ -130,7 +130,7 @@ async def lifespan(app):
     try: await asyncio.to_thread(balancer_service.stop)
     except: pass
 
-app=FastAPI(title="Mastervolt Energy",version="1.10.0",lifespan=lifespan)
+app=FastAPI(title="Mastervolt Energy",version="1.11.0",lifespan=lifespan)
 app.add_middleware(GZipMiddleware,minimum_size=1000)
 app.mount("/static",StaticFiles(directory=STATIC),name="static")
 
@@ -229,6 +229,11 @@ def update_history_chart_data(hours:float|None=None):return _chart_data(hours,Tr
 
 @app.get("/api/history/export")
 def history_export():return StreamingResponse(history_service.json_lines(),media_type="application/x-ndjson",headers={"Content-Disposition":"attachment; filename=mastervolt-history.jsonl"})
+
+@app.get("/api/history/contributions")
+def history_contributions(start:str,end:str):
+    try:return history_service.contributions(start,end)
+    except ValueError as e:raise HTTPException(400,detail=str(e))
 
 class ReportReq(BaseModel): days:int=Field(ge=1,le=365)
 
