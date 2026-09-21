@@ -12,6 +12,9 @@ Unless an entry says otherwise, every release also bumps the application version
 
 ## 1.12 — Bluetooth reliability
 
+### 1.12.2
+- **Signal strength.** Every scan now records the advertisement signal strength (RSSI, dBm) of each DALY balancer and battery it sees, also of balancers that were visible but not being looked for. `GET /api/bluetooth-events` reports it per device as `signal` (last, average, recent average, min, max), and the balancer scan line in `logs/bluetooth.log` shows it (`found DL-BAL3 (-71 dBm); also visible DL-BAL2 (-58 dBm)`). Purpose: tell a weak link (a balancer that is visible but cannot be connected) from a device that is held by another Bluetooth central or has stopped advertising. Passive: it only reads what the existing scans already return. Nothing else changed.
+
 ### 1.12.1
 - **Bluetooth timings.** `GET /api/bluetooth-events` now also reports, per device, how long each step took: `connect`, `notify` (start of notifications), `read` (a complete status), `disconnect`, `radio_wait` (waiting for the radio) and `radio_hold` (how long the radio was occupied), plus the balancer `scan`. Each has the count, successful/failed, average, median, p95 and maxima (most recent 200 samples). A successful connect that takes 8 s or more is logged as `slow_connect`, and failed connects/reads now say how long they held the radio (`after 18.0 s on the radio`). This is to choose the connect time-outs from measurements. Nothing in the Bluetooth behaviour changed.
 - No functional changes to the controls, Float protection or the mappings.

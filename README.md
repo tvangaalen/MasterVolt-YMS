@@ -1,6 +1,6 @@
 # MasterVolt YMS
 
-**Mastervolt Energy v1.12.1** — a private web app (installable iPhone PWA) that monitors and controls a boat's
+**Mastervolt Energy v1.12.2** — a private web app (installable iPhone PWA) that monitors and controls a boat's
 Mastervolt electrical system and its DALY battery management, from a Windows PC on the boat's LAN.
 
 - **MasterBus** over the Mastervolt USB Link: CombiMaster (shore power, inverter, charger), Solar ChargeMaster,
@@ -79,7 +79,7 @@ masterbus_*.py             MasterBus USB protocol, service, control, discovery, 
 daly_bms_service.py        DALY BMS Bluetooth (persistent per-battery workers, MOS/SOC control)
 daly_balancer_service.py   DALY balancer Bluetooth (read-only; crash-proof worker with watchdog and back-off)
 bluetooth_coordinator.py   Process-wide Bluetooth priority queue (lease tokens, max-hold, degraded mode)
-ble_events.py              Bluetooth event log, per-device counters and connect/read timings (logs/bluetooth.log, /api/bluetooth-events)
+ble_events.py              Bluetooth event log, per-device counters, connect/read timings and signal strength (logs/bluetooth.log, /api/bluetooth-events)
 house_soc.py               House SOC from the DALY readings with an age check (used by Float protection)
 history_service.py         SQLite history and server-side chart cache
 static/                    index.html (SPA), PWA manifest + service worker, icons, cached product photos
