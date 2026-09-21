@@ -27,6 +27,10 @@ There is no hardware-free test suite for the MasterBus side. These run without h
 py self_check.py                       # structure of MasterBusService / ControlDiscovery (required methods exist)
 py bms_control_self_test.py            # DALY MOS control logic
 py bluetooth_connection_self_test.py   # failure-isolated Bluetooth workers
+py bluetooth_coordinator_self_test.py  # Bluetooth priority gate: tokens, max-hold, FIFO, degraded mode
+py daly_bms_worker_self_test.py        # BMS monitoring workers on a simulated bleak (~25 s)
+py daly_balancer_self_test.py          # balancer service on a simulated bleak: time-outs, back-off, watchdog (~20 s)
+py float_freshness_self_test.py        # stale-SOC handling of the real Float-protection loop (stubbed hardware)
 py battery_health_self_test.py         # battery_health.py analysis on synthetic data
 py report_service_self_test.py         # Reports-tab job runner (separate process, one at a time, errors, timeout)
 py history_service_self_test.py        # History pie totals (HistoryService.contributions): energy, gaps, alarms, hourly totals
@@ -47,6 +51,8 @@ Delete `__pycache__` folders after running Python here; the project lives in Goo
 - Stacked History charts are drawn as areas by `drawStackedHistoryChart` (with `smoothPoints`), not as bars: no per-bar gaps or alpha, so no stripes. Keep bands opaque on the offscreen layer and composite once.
 - New MasterBus/DALY behaviour goes through the existing service classes (`MasterBusService`, `DalyBmsService`, `DalyBalancerService`) and the shared `io_lock` / Bluetooth coordinator. Never open a second HID or BLE connection from a new code path.
 - Bluetooth work must go through `bluetooth_coordinator.py` using the existing priority order (user controls > manual refresh > auto reconnect > auto reads > balancers). Per-battery workers are failure-isolated; keep them so.
+- **Every Windows BLE call needs a hard deadline** (`asyncio.wait_for` around `connect`, `start_notify`, GATT writes, `disconnect`): a hung WinRT call otherwise freezes a whole worker loop. A client that connected but failed later must be disconnected. `acquire()` returns a token that `release()` must be given, and a lease that outlives its max-hold time is taken back. Log failures with `ble_events.ble_log` (`/api/bluetooth-events`). New Bluetooth logic is tested against the simulated `bleak` in `ble_fakes.py`, never with real hardware.
+- **Float protection only trusts a fresh SOC** (`house_soc.py`). Do not read `state_of_charge_percent` from the BMS snapshot directly for control decisions: use `available_house_bms_soc` / `house_bms_soc_details` in `app.py`. No MasterShunt fallback without the user's approval.
 - Settings live in `masterbus_service.py` (`self.settings`, `_validate_settings`), `app.py` (`SettingsReq`) and the Settings page. Add a setting in all three, validate on client and server, and give it a default that keeps existing `user_settings.json` files working.
 
 ## Releasing
@@ -74,6 +80,7 @@ Also update the version line at the top of `README.md`. Do not recreate per-rele
 ## Two folders: source vs live
 
 - `G:\My Drive\Claude\MasterVolt-YMS` (Google Drive) is the **source** copy. Do not run the server from it: it holds only a stale snapshot of runtime state, and a large SQLite history should not live on Drive.
+- When Google Drive (`G:`) is not available, work in the independent clone (a normal git checkout of the GitHub repository, for example under the user's `Claude working folder`). Commit and push from there; the Drive copy and the external `.gitrepos` repository catch up later by pulling from GitHub, so never edit the same file in two copies at once.
 - `C:\Temp\mastervoltproject` is the **live** folder the boat PC runs from. It holds the real `user_settings.json` (Float 95% / Bulk 90%, 31-day retention), `data/history.sqlite3` (~380 MB), `backups/`, `certs/*-key.pem` and `data/bms_mos_encoding.json`.
 - To deploy: copy only the changed code files (e.g. `app.py`, `daly_balancer_service.py`, `static/*`) from source to live, after backing up the live versions to a sibling folder such as `C:\Temp\mastervoltproject_pre_swap_<timestamp>`. Never overwrite live runtime state, and never run with a settings file that lacks `history_retention_days` against the live database (missing means the 7-day default and pruning).
 - Before restarting, read-only check `/api/bms` (`control_status.busy` false) and `/api/energy` (`high_soc_float_policy`); a restart pauses server-side Float protection.

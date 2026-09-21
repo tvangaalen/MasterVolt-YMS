@@ -10,6 +10,23 @@ Unless an entry says otherwise, every release also bumps the application version
 
 ---
 
+## 1.12 — Bluetooth reliability
+
+### 1.12.0
+Based on an analysis of the stored history: the balancers were silent for 29% of the uptime (every gap ended at a server restart) and Battery 2's link was lost 4.3% of the time against 0.3% for Batteries 1 and 3. The MasterBus side and the MOSFET/SOC **control write paths are unchanged**; only the read/monitoring path and the shared radio arbitration were changed.
+- **Balancers (`daly_balancer_service.py`, rewritten, same API):**
+  - Every Windows BLE call now has a hard time-out (connect, notifications, GATT writes, disconnect), so a hung call can no longer freeze the single balancer loop.
+  - A crash-proof supervisor rebuilds the worker if anything raises; a **stall watchdog** forces a rescan after 10 minutes without a successful read, then rebuilds the worker, and finally reports the balancers as *wedged* (visible in `/api/balancers`).
+  - **Exponential back-off per balancer** (retry × 2ⁿ, at most 5 minutes): a failing balancer no longer slows the healthy ones, and a healthy balancer keeps its own refresh interval.
+  - A status is **published only when all nine commands were answered**; unanswered commands are asked once more within the same connection. No more half-read balancer rows in the history.
+  - Static device information is read once instead of every cycle; known balancers are not scanned for again.
+  - The snapshot reports `last_success_age_seconds`, `stale`, `next_attempt_in_seconds`, `wedged`, `worker_restarts`; the Balance page shows *Data N min old* for stale data.
+- **Bluetooth coordinator (`bluetooth_coordinator.py`, rewritten, same priority order):** lease tokens (a late release from a timed-out caller can no longer free someone else's turn), a maximum hold time per kind that takes the radio back from a hung holder, FIFO order within a priority, and a **degraded mode**: if one BMS stays unreachable for 2 minutes the balancers are allowed again instead of waiting forever.
+- **BMS monitoring (`daly_bms_service.py`):** hard deadlines on connect/notify/disconnect, a client that connected but never finished starting notifications is now closed (no leaked handle), a lost status request is retried once before the link is rebuilt, an incomplete status is never published (three in a row rebuild the link), and an unreachable battery is retried with exponential back-off (at most 60 s). Removed the unused legacy service class.
+- **Bluetooth event log:** new `ble_events.py` writes `logs/bluetooth.log` (rotating, 1 MB × 3) and keeps per-device counters; `GET /api/bluetooth-events` returns them, so the next reliability question can be answered from data.
+- **Float protection freshness (`house_soc.py`):** the House SOC now only averages DALY readings younger than max(120 s, 4 refresh intervals). If none is fresh the SOC is unknown. While Float is latched an unknown SOC **holds** Float (sources that start charging are still put in Float) and **never resumes Bulk on old data**; an unknown SOC never starts Float protection by itself. Before, a battery whose link was down kept contributing its last SOC indefinitely. `high_soc_float_policy` gains `soc_held`, `soc_stale`, `soc_fresh_batteries`, `soc_age_seconds`, `last_known_soc`; `soc_source` can be `stale_hold`. The Float/Bulk thresholds, the 20 s retry and the verified Float/Bulk command sequences are unchanged. `/api/energy` reports `soc_fresh_batteries`, `soc_age_seconds` and `soc_source: daly_bms_stale` when only old readings exist (the Dashboard then shows no SOC instead of an old one).
+- New hardware-free tests with a simulated `bleak` (`ble_fakes.py`): `daly_balancer_self_test.py`, `daly_bms_worker_self_test.py`, `bluetooth_coordinator_self_test.py`, `float_freshness_self_test.py`. **Not yet verified on the boat's hardware.** Suggested settings after deploying: balancer refresh interval 300 s and retry at least 60 s.
+
 ## 1.11 — History totals
 
 ### 1.11.0
