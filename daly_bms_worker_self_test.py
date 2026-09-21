@@ -10,7 +10,7 @@ import bleak
 
 import daly_bms_service as bms
 from ble_events import ble_log
-from ble_fakes import BEHAVIOUR, COUNT, PRESENT, FakeClient, FakeScanner, wait
+from ble_fakes import BEHAVIOUR, COUNT, PRESENT, RSSI, FakeClient, FakeScanner, wait
 from bluetooth_coordinator import BluetoothCoordinator
 
 NAMES = bms.DEVICE_NAMES
@@ -58,6 +58,7 @@ def main():
     bleak.BleakClient, bleak.BleakScanner = TimedClient, FakeScanner
     # ---- 1. normal operation
     s, c = make()
+    RSSI["BATTERY 2"] = -77
     start(s)
     assert wait(lambda: all(published(s, n) for n in NAMES)), [s._battery(n) for n in NAMES]
     assert wait(lambda: COUNT[("BATTERY 1", "write")] >= 18), "the batteries are not read periodically"       # two full rounds of 9 requests
@@ -72,7 +73,9 @@ def main():
     for n in NAMES:
         t = ble_log.snapshot()["counters"][n]["timings"]
         assert t["connect"]["ok"] == 1 and t["notify"]["ok"] == 1 and t["read"]["ok"] >= 1 and t["radio_wait"]["ok"] >= 2 and t["radio_hold"]["ok"] == 1, (n, t)     # one wait for the connect, one per read
-    print("Persistent links, complete periodic reads, radio released between operations, timings recorded: OK")
+    assert ble_log.snapshot()["counters"]["BATTERY 2"]["signal"]["last_dbm"] == -77 and ble_log.snapshot()["counters"]["BATTERY 1"]["signal"]["last_dbm"] == -60
+    RSSI.clear()
+    print("Persistent links, complete periodic reads, radio released between operations, timings and signal strength recorded: OK")
 
     # ---- 2. a hung connect() is cut off, the radio is released and the others keep going
     s, c = make()

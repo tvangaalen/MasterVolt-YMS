@@ -254,11 +254,11 @@ class _BatteryWorker:
         try:
             self.service._wait_connection_pause()
             if self.device is None or self.connection_failures>=3:
-                found=await BleakScanner.find_device_by_filter(
-                    lambda device,advertisement:self.name.casefold() in (
-                        getattr(advertisement,"local_name",None) or getattr(device,"name",None) or ""
-                    ).casefold(),timeout=10
-                )
+                def wanted(device,advertisement):
+                    hit=self.name.casefold() in (getattr(advertisement,"local_name",None) or getattr(device,"name",None) or "").casefold()
+                    if hit and isinstance(getattr(advertisement,"rssi",None),int):ble_log.rssi(self.name,advertisement.rssi)
+                    return hit
+                found=await BleakScanner.find_device_by_filter(wanted,timeout=10)
                 if found is None:raise RuntimeError(f"{self.name} was not found. Wake it and close the DALY phone app.")
                 self.device=found;self.device_name=getattr(found,"name",None) or self.name;self.connection_failures=0
             self.service._set_state(self.name,"connecting",None,device_name=self.device_name)

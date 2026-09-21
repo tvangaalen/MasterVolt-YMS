@@ -189,12 +189,17 @@ class DalyBalancerService:
             if not granted:raise BalancerDeferred("Waiting for BMS connection priority")
             with ble_log.timed("balancers","scan"):records=await BleakScanner.discover(timeout=12,return_adv=True)
         pairs=records.values() if isinstance(records,dict) else records
-        matches={}
+        matches={};signal={}
         for device,advertisement in pairs:
             visible=(getattr(advertisement,"local_name",None) or getattr(device,"name",None) or "")
-            for name in names:
-                if name.casefold() in visible.casefold():matches.setdefault(name,device)
-        ble_log.log("balancers","scan",f"looked for {', '.join(names)}; found {', '.join(matches) or 'none'}")
+            for name in DEVICE_NAMES:          # every balancer in range gives a signal-strength sample, also the ones not looked for
+                if name.casefold() in visible.casefold():
+                    rssi=getattr(advertisement,"rssi",None)
+                    if isinstance(rssi,int):ble_log.rssi(name,rssi);signal[name]=rssi
+                    if name in names:matches.setdefault(name,device)
+        show=lambda name:f"{name} ({signal[name]} dBm)" if name in signal else name
+        others=[name for name in signal if name not in matches]
+        ble_log.log("balancers","scan",f"looked for {', '.join(names)}; found {', '.join(show(name) for name in matches) or 'none'}"+(f"; also visible {', '.join(show(name) for name in others)}" if others else ""))
         return matches
 
     async def _disconnect(self,name,client=None):

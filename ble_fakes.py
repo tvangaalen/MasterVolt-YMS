@@ -8,6 +8,7 @@ WRITE_UUID = "0000fff2-0000-1000-8000-00805f9b34fb"
 COUNT = Counter()
 BEHAVIOUR = {}
 PRESENT = set()
+RSSI = {}          # per device name: advertised signal strength in dBm (default -60)
 
 
 def frame(command, data):
@@ -46,6 +47,7 @@ class Device:
 class Advertisement:
     def __init__(self, name):
         self.local_name = name
+        self.rssi = RSSI.get(name, -60)
 
 
 class Sender:

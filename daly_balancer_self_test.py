@@ -12,7 +12,7 @@ import daly_balancer_service as bal
 from ble_events import ble_log
 from bluetooth_coordinator import BluetoothCoordinator
 
-from ble_fakes import COUNT, BEHAVIOUR, PRESENT, FakeClient, FakeScanner, wait
+from ble_fakes import COUNT, BEHAVIOUR, PRESENT, RSSI, FakeClient, FakeScanner, wait
 
 NAMES = bal.DEVICE_NAMES
 
@@ -55,6 +55,7 @@ def main():
     try:
         # ---- 1. normal operation: complete statuses only, static data read once
         s, _ = make(interval=0.15)
+        RSSI.update({"DL-BAL1": -85, "DL-BAL2": -62})
         s.start()
         assert wait(lambda: all(s.devices[n]["captured_at"] for n in NAMES) and len(s.published) >= 6), s.published
         s.stop()
@@ -71,7 +72,12 @@ def main():
             assert timings[kind]["ok"] >= 2 and timings[kind]["avg_ok_seconds"] is not None and timings[kind]["p95_ok_seconds"] >= timings[kind]["p50_ok_seconds"], (kind, timings.get(kind))
         assert timings["radio_hold"]["avg_ok_seconds"] >= timings["connect"]["avg_ok_seconds"], "the radio is held at least as long as the connect takes"
         assert ble_log.snapshot()["counters"]["balancers"]["timings"]["scan"]["count"] == 1
-        print("Complete statuses only, device information read once, one scan for three balancers, timings recorded: OK")
+        signal = {n: ble_log.snapshot()["counters"][n]["signal"] for n in NAMES}
+        assert (signal["DL-BAL1"]["last_dbm"], signal["DL-BAL2"]["last_dbm"], signal["DL-BAL3"]["last_dbm"]) == (-85, -62, -60), signal
+        scan = [e["detail"] for e in ble_log.snapshot(300)["events"] if e["kind"] == "scan"][0]
+        assert "DL-BAL1 (-85 dBm)" in scan and "DL-BAL3 (-60 dBm)" in scan, scan
+        RSSI.clear()
+        print("Complete statuses only, device information read once, one scan for three balancers, timings and signal strength recorded: OK")
 
         # ---- 2. an unanswered command is asked again within the same connection
         s, _ = make(interval=5)

@@ -4,7 +4,8 @@ The measurement history only records *successful* readings, so connection troubl
 connect, read, timeout and watchdog action is logged here: to a rotating file (logs/bluetooth.log), to a small
 in-memory ring buffer and into per-device counters that the API exposes (/api/bluetooth-events).
 The same counters hold *timings* (how long connect, notifications, a status read, a disconnect, a scan, the wait for the
-radio and the time the radio was held took), so time-outs can be chosen from measurements instead of guesses.
+radio and the time the radio was held took), so time-outs can be chosen from measurements instead of guesses, and the
+advertisement *signal strength* (RSSI, dBm) of every DALY device seen in a scan, to tell a weak link from other causes.
 Logging must never disturb the Bluetooth code, so every failure to log is swallowed.
 """
 from __future__ import annotations
@@ -20,6 +21,7 @@ from pathlib import Path
 
 SLOW_CONNECT_SECONDS=8.0      # a connect that succeeds but takes this long is written to the log file as well
 TIMING_SAMPLES=200            # most recent samples per device and kind that the percentiles are calculated from
+SIGNAL_SAMPLES=100            # most recent advertisement signal strengths (dBm) per device
 
 
 def _percentile(values,fraction):
@@ -29,7 +31,7 @@ def _percentile(values,fraction):
 
 class BleEventLog:
     def __init__(self,path=None,keep=300):
-        self.lock=threading.Lock();self.events=deque(maxlen=keep);self.counters={};self.timings={};self._logger=None
+        self.lock=threading.Lock();self.events=deque(maxlen=keep);self.counters={};self.timings={};self.signals={};self._logger=None
         if path:self.configure(path)
 
     def configure(self,path):
@@ -72,6 +74,17 @@ class BleEventLog:
                 self.log(device,"slow_connect",f"connected after {seconds:.1f} s")
         except Exception:pass
 
+    def rssi(self,device,dbm):
+        """Record the signal strength (dBm) of one advertisement seen during a scan. Values that cannot be right are ignored."""
+        try:
+            dbm=int(dbm)
+            if not -127<=dbm<=20:return
+            with self.lock:
+                item=self.signals.setdefault(device,{"count":0,"sum":0,"min":dbm,"max":dbm,"last":dbm,"last_epoch":None,"recent":deque(maxlen=SIGNAL_SAMPLES)})
+                item["count"]+=1;item["sum"]+=dbm;item["min"]=min(item["min"],dbm);item["max"]=max(item["max"],dbm)
+                item["last"]=dbm;item["last_epoch"]=time.time();item["recent"].append(dbm)
+        except Exception:pass
+
     @contextmanager
     def timed(self,device,kind):
         """`with ble_log.timed(name,"connect"): await ...` - the sample is a success unless the block raises (also on a time-out)."""
@@ -95,10 +108,14 @@ class BleEventLog:
             counters={device:{**counter,"events":dict(counter["events"]),"failures":dict(counter["failures"])} for device,counter in self.counters.items()}
             for device,kinds in self.timings.items():
                 counters.setdefault(device,{**self._counter_defaults()})["timings"]={kind:self._timing_summary(item) for kind,item in kinds.items()}
+            for device,item in self.signals.items():
+                recent=list(item["recent"])
+                counters.setdefault(device,{**self._counter_defaults()})["signal"]={"count":item["count"],"last_dbm":item["last"],"last_seen_epoch":item["last_epoch"],
+                    "avg_dbm":round(item["sum"]/item["count"],1),"recent_avg_dbm":round(sum(recent)/len(recent),1),"min_dbm":item["min"],"max_dbm":item["max"]}
             return {"counters":counters,"events":list(self.events)[-max(1,min(int(limit),300)):]}
 
     def clear(self):
-        with self.lock:self.events.clear();self.counters.clear();self.timings.clear()
+        with self.lock:self.events.clear();self.counters.clear();self.timings.clear();self.signals.clear()
 
     @staticmethod
     def _counter_defaults():

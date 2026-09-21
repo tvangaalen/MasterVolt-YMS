@@ -77,6 +77,27 @@ def main():
         text = (Path(folder) / "logs" / "bluetooth.log").read_text(encoding="utf-8")
         assert "A slow_connect | connected after 9.5 s" in text, text
     print("Logging is failure-proof and slow connects reach the log file: OK")
+    # signal strength: statistics, only the recent samples decide the recent average, rubbish and impossible values are ignored
+    log = BleEventLog()
+    for dbm in (-60, -70, -80):
+        log.rssi("DL-BAL1", dbm)
+    for bad in (None, "x", 0.5j, -200, 99, 21, -128):
+        log.rssi("DL-BAL1", bad)
+    s = log.snapshot()["counters"]["DL-BAL1"]["signal"]
+    assert s["count"] == 3 and s["last_dbm"] == -80 and s["min_dbm"] == -80 and s["max_dbm"] == -60 and s["avg_dbm"] == -70.0 and s["recent_avg_dbm"] == -70.0, s
+    assert isinstance(s["last_seen_epoch"], float)
+    for _ in range(ble_events.SIGNAL_SAMPLES):
+        log.rssi("DL-BAL1", -50)
+    s = log.snapshot()["counters"]["DL-BAL1"]["signal"]
+    assert s["recent_avg_dbm"] == -50.0 and s["min_dbm"] == -80 and s["count"] == 3 + ble_events.SIGNAL_SAMPLES, s
+    log.timing("DL-BAL1", "connect", 2.0, True)                       # signal, timings and counters live side by side
+    log.log("DL-BAL1", "connect_ok", quiet=True)
+    both = log.snapshot()["counters"]["DL-BAL1"]
+    assert "signal" in both and "timings" in both and both["events"]["connect_ok"] == 1
+    json.dumps(log.snapshot())
+    log.clear()
+    assert log.snapshot() == {"counters": {}, "events": []}
+    print("Signal strength statistics, invalid values ignored, coexists with timings: OK")
     print("All Bluetooth event log checks: OK")
 
 
