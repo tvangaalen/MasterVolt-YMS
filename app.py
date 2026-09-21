@@ -1,6 +1,6 @@
 from contextlib import asynccontextmanager
 from pathlib import Path
-import asyncio, threading
+import asyncio, threading, time
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse,StreamingResponse
@@ -11,11 +11,14 @@ from daly_bms_service import DalyBmsService
 from daly_balancer_service import DalyBalancerService
 from history_service import HistoryService
 from bluetooth_coordinator import bluetooth_coordinator
+from ble_events import ble_log
+from house_soc import house_soc as _house_soc, max_age_seconds
 from report_service import BatteryHealthReports
 
 BASE=Path(__file__).resolve().parent
 STATIC=BASE/"static"
 CERTS=BASE/"certs"
+ble_log.configure(BASE/"logs"/"bluetooth.log")
 service=MasterBusService()
 bms_service=DalyBmsService()
 balancer_service=DalyBalancerService()
@@ -49,18 +52,16 @@ def _history_loop():
 # Float protection and Dashboard use the same authoritative DALY House SOC.
 # Protection waits until the first valid DALY reading instead of acting on a
 # conflicting MasterShunt value during Bluetooth startup.
-def available_house_bms_soc():
-    """Average every valid DALY SOC; the three BMSes form one house bank."""
+def house_bms_soc_details():
+    """Average of every valid DALY SOC that is still fresh; the three BMSes form one house bank. A reading older than
+    max(120 s, 4 refresh intervals) is not used: Float protection must not act on a value the Bluetooth link stopped updating."""
     batteries=bms_service.snapshot().get("batteries",{})
-    values=[]
-    for name in ("BATTERY 1","BATTERY 2","BATTERY 3"):
-        value=batteries.get(name,{}).get("state_of_charge_percent")
-        try:value=float(value)
-        except (TypeError,ValueError):continue
-        if 0<=value<=100:values.append(value)
-    return sum(values)/len(values) if values else None
+    return _house_soc(batteries,time.time(),max_age_seconds(bms_service._settings_getter()["bms_refresh_interval"]))
+
+def available_house_bms_soc():return house_bms_soc_details()["soc"]
 
 service.house_soc_getter=available_house_bms_soc
+service.house_soc_details_getter=house_bms_soc_details
 
 
 def _is_benign_client_disconnect(exc):
@@ -130,7 +131,7 @@ async def lifespan(app):
     try: await asyncio.to_thread(balancer_service.stop)
     except: pass
 
-app=FastAPI(title="Mastervolt Energy",version="1.11.0",lifespan=lifespan)
+app=FastAPI(title="Mastervolt Energy",version="1.12.0",lifespan=lifespan)
 app.add_middleware(GZipMiddleware,minimum_size=1000)
 app.mount("/static",StaticFiles(directory=STATIC),name="static")
 
@@ -173,10 +174,12 @@ def local_ca():
 async def energy():
     try:
         data=service.energy()
-        soc=available_house_bms_soc()
+        details=house_bms_soc_details();soc=details["soc"]
         if "house" in data.get("storage",{}):
             data["storage"]["house"]["soc"]=soc
-            data["storage"]["house"]["soc_source"]="daly_bms_average" if soc is not None else "daly_bms_unavailable"
+            data["storage"]["house"]["soc_source"]="daly_bms_average" if soc is not None else ("daly_bms_stale" if details["stale_batteries"] else "daly_bms_unavailable")
+            data["storage"]["house"]["soc_fresh_batteries"]=details["fresh_batteries"]
+            data["storage"]["house"]["soc_age_seconds"]=details["youngest_age_seconds"]
         return data
     except Exception as e:raise HTTPException(503,detail=str(e))
 
@@ -197,6 +200,9 @@ def balancers(): return balancer_service.snapshot()
 
 @app.get("/api/bluetooth-coordinator")
 def bluetooth_status():return bluetooth_coordinator.snapshot()
+
+@app.get("/api/bluetooth-events")
+def bluetooth_events(limit:int=100):return ble_log.snapshot(limit)
 
 @app.get("/api/history")
 def history(limit:int=100):return {"count":history_service.count(),"retention_days":service.get_settings()["history_retention_days"],"records":history_service.latest(limit)}

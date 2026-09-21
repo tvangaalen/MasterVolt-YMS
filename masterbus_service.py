@@ -4,6 +4,7 @@ from masterbus_usb import MasterBusUsb
 from masterbus_protocol import monitoring_request,encode_set_float,encode_set_boolean,encode_commit,decode_monitoring
 from masterbus_registry import *
 from masterbus_discovery import Discovery
+from house_soc import float_decision
 from masterbus_protocol import btm3_read_request, btm3_write_float, decode_btm3_value
 
 class MasterBusService:
@@ -746,10 +747,13 @@ class MasterBusService:
         while not self.stop_event.wait(3.0):
             settings=self.get_settings()
             self.float_policy_status["last_check_at"]=time.time()
+            details=None
             try:
-                bms_soc=self.house_soc_getter() if callable(getattr(self,"house_soc_getter",None)) else None
+                if callable(getattr(self,"house_soc_details_getter",None)):
+                    details=self.house_soc_details_getter();bms_soc=details["soc"]
+                else:bms_soc=self.house_soc_getter() if callable(getattr(self,"house_soc_getter",None)) else None
             except Exception:
-                bms_soc=None
+                details=None;bms_soc=None
             # Do not fall back to MasterShunt here: the Dashboard's authoritative
             # House SOC is DALY. Until DALY has produced a valid reading, Float
             # protection waits rather than acting on a conflicting SOC value.
@@ -760,13 +764,20 @@ class MasterBusService:
             enabled=settings["float_protection_enabled"]
             threshold=settings["house_battery_soc"]
             bulk_threshold=settings["bulk_resume_soc"]
-            resume=enabled and self.float_policy_status.get("float_latched") and soc_value is not None and soc_value<=bulk_threshold
-            active=enabled and soc_value is not None and soc_value>=threshold and not resume
+            # A SOC that is missing or older than the freshness limit (DALY link down) counts as unknown. While Float is
+            # latched that holds the sources in Float (never resumes Bulk on old data); it never starts Float by itself.
+            active,resume,held=float_decision(enabled,self.float_policy_status.get("float_latched"),soc_value,threshold,bulk_threshold)
+            if held:soc_source="stale_hold"
             self.float_policy_status["enabled"]=enabled
             self.float_policy_status["threshold_soc"]=threshold
             self.float_policy_status["bulk_resume_soc"]=bulk_threshold
             self.float_policy_status["house_soc"]=soc_value
             self.float_policy_status["soc_source"]=soc_source
+            self.float_policy_status["soc_held"]=held
+            self.float_policy_status["soc_fresh_batteries"]=None if details is None else details.get("fresh_batteries")
+            self.float_policy_status["soc_age_seconds"]=None if details is None else details.get("youngest_age_seconds")
+            self.float_policy_status["soc_stale"]=bool(details and soc_value is None and details.get("stale_batteries"))
+            self.float_policy_status["last_known_soc"]=None if details is None else details.get("last_known_soc")
             self.float_policy_status["active"]=active
             if not enabled:
                 self.float_policy_status["sources"]={};self.float_policy_status["float_latched"]=False
