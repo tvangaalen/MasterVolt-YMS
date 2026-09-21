@@ -28,6 +28,7 @@ py self_check.py                       # structure of MasterBusService / Control
 py bms_control_self_test.py            # DALY MOS control logic
 py bluetooth_connection_self_test.py   # failure-isolated Bluetooth workers
 py bluetooth_coordinator_self_test.py  # Bluetooth priority gate: tokens, max-hold, FIFO, degraded mode
+py ble_events_self_test.py             # Bluetooth event log: counters, timing statistics, slow-connect logging
 py daly_bms_worker_self_test.py        # BMS monitoring workers on a simulated bleak (~25 s)
 py daly_balancer_self_test.py          # balancer service on a simulated bleak: time-outs, back-off, watchdog (~20 s)
 py float_freshness_self_test.py        # stale-SOC handling of the real Float-protection loop (stubbed hardware)

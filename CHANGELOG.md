@@ -12,6 +12,10 @@ Unless an entry says otherwise, every release also bumps the application version
 
 ## 1.12 — Bluetooth reliability
 
+### 1.12.1
+- **Bluetooth timings.** `GET /api/bluetooth-events` now also reports, per device, how long each step took: `connect`, `notify` (start of notifications), `read` (a complete status), `disconnect`, `radio_wait` (waiting for the radio) and `radio_hold` (how long the radio was occupied), plus the balancer `scan`. Each has the count, successful/failed, average, median, p95 and maxima (most recent 200 samples). A successful connect that takes 8 s or more is logged as `slow_connect`, and failed connects/reads now say how long they held the radio (`after 18.0 s on the radio`). This is to choose the connect time-outs from measurements. Nothing in the Bluetooth behaviour changed.
+- No functional changes to the controls, Float protection or the mappings.
+
 ### 1.12.0
 Based on an analysis of the stored history: the balancers were silent for 29% of the uptime (every gap ended at a server restart) and Battery 2's link was lost 4.3% of the time against 0.3% for Batteries 1 and 3. The MasterBus side and the MOSFET/SOC **control write paths are unchanged**; only the read/monitoring path and the shared radio arbitration were changed.
 - **Balancers (`daly_balancer_service.py`, rewritten, same API):**
