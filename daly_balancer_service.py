@@ -187,7 +187,7 @@ class DalyBalancerService:
         if not names:return {}
         async with bluetooth_coordinator.alease("balancer",timeout=3) as granted:
             if not granted:raise BalancerDeferred("Waiting for BMS connection priority")
-            records=await BleakScanner.discover(timeout=12,return_adv=True)
+            with ble_log.timed("balancers","scan"):records=await BleakScanner.discover(timeout=12,return_adv=True)
         pairs=records.values() if isinstance(records,dict) else records
         matches={}
         for device,advertisement in pairs:
@@ -200,7 +200,8 @@ class DalyBalancerService:
     async def _disconnect(self,name,client=None):
         target=client or self.clients.pop(name,None)
         if target:
-            try:await asyncio.wait_for(target.disconnect(),timeout=DISCONNECT_TIMEOUT)
+            try:
+                with ble_log.timed(name,"disconnect"):await asyncio.wait_for(target.disconnect(),timeout=DISCONNECT_TIMEOUT)
             except asyncio.TimeoutError:ble_log.log(name,"disconnect_timeout",f"disconnect did not finish within {DISCONNECT_TIMEOUT:g} s (possible leaked Windows Bluetooth handle)",failure=True)
             except BaseException:pass
 
@@ -223,8 +224,8 @@ class DalyBalancerService:
             options.pop("winrt",None);client=BleakClient(device,**options)   # a bleak without WinRT client arguments
         ble_log.log(name,"connect_try",quiet=True)
         try:
-            await asyncio.wait_for(client.connect(),timeout=CONNECT_TIMEOUT)
-            await asyncio.wait_for(client.start_notify(NOTIFY_UUID,lambda sender,data,n=name:self._notification(n,sender,data)),timeout=NOTIFY_TIMEOUT)
+            with ble_log.timed(name,"connect"):await asyncio.wait_for(client.connect(),timeout=CONNECT_TIMEOUT)
+            with ble_log.timed(name,"notify"):await asyncio.wait_for(client.start_notify(NOTIFY_UUID,lambda sender,data,n=name:self._notification(n,sender,data)),timeout=NOTIFY_TIMEOUT)
         except BaseException:
             await self._disconnect(name,client)
             raise
@@ -332,8 +333,10 @@ class DalyBalancerService:
         if pending:
             message=f"Incomplete status: no answer to {', '.join(f'0x{c:02X}' for c in pending)}"
             self._set(name,state="connected",error=message);ble_log.log(name,"read_incomplete",message,failure=True)
+            ble_log.timing(name,"read",time.monotonic()-started,False)
             return False
         self._update_status(name)
+        ble_log.timing(name,"read",time.monotonic()-started,True)
         ble_log.log(name,"read_ok",f"{sum(len(v) for v in self.decoded[name].values())} frames in {time.monotonic()-started:.1f} s",success=True,quiet=True)
         return True
 
@@ -404,13 +407,15 @@ class DalyBalancerService:
                     # A manual refresh request overtakes the rest of a running full cycle.
                     if not manual and self.single_queue:cycle_complete=False;break
                     device=discovered.get(name) or self.known_devices.get(name)
-                    ok=incomplete=False
+                    ok=incomplete=False;held_from=None;asked=time.monotonic()
                     try:
                         # One lease covers connect, notifications, read and all
                         # request frames. A BMS operation can no longer slip in
                         # between connect and read and leave a stale wait state.
                         async with bluetooth_coordinator.alease("balancer",timeout=8) as granted:
+                            ble_log.timing(name,"radio_wait",time.monotonic()-asked,bool(granted))
                             if not granted:raise BalancerDeferred("Queued for Bluetooth radio")
+                            held_from=time.monotonic()
                             await self._connect(name,device)
                             ok=await self._read(name)
                             incomplete=not ok
@@ -427,8 +432,10 @@ class DalyBalancerService:
                         if self.connection_failures[name]>=2:self.known_devices.pop(name,None)
                         message=str(exc).strip() or f"{name} connection timed out; retrying automatically"
                         self._set(name,state="error",error=message)
-                        ble_log.log(name,phase,f"{type(exc).__name__}: {message}",failure=True)
+                        after=f" (after {time.monotonic()-held_from:.1f} s on the radio)" if held_from else ""
+                        ble_log.log(name,phase,f"{type(exc).__name__}: {message}{after}",failure=True)
                     finally:
+                        if held_from:ble_log.timing(name,"radio_hold",time.monotonic()-held_from,ok)
                         await self._disconnect(name)
                     if ok:
                         self.last_success[name]=time.monotonic();self.last_progress=self.last_success[name]

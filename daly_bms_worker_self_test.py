@@ -32,7 +32,7 @@ def fast(**overrides):
 
 def make(retry=0.3, degraded_after=None, **overrides):
     COUNT.clear(); BEHAVIOUR.clear(); PRESENT.clear(); ATTEMPTS.clear(); PRESENT.update(NAMES)
-    ble_log.counters.clear(); ble_log.events.clear()
+    ble_log.clear()
     for name in NAMES: BEHAVIOUR[name] = {}
     fast(**overrides)
     coordinator = BluetoothCoordinator(degraded_after=degraded_after)
@@ -69,7 +69,10 @@ def main():
         assert COUNT[(n, "connect")] == 1, "the persistent link must not be rebuilt"
     assert csnap["connected_bms"] == 3 and csnap["refreshed_bms"] == 3 and csnap["balancers_allowed"]
     assert c.snapshot()["active"] is None
-    print("Persistent links, complete periodic reads, radio released between operations: OK")
+    for n in NAMES:
+        t = ble_log.snapshot()["counters"][n]["timings"]
+        assert t["connect"]["ok"] == 1 and t["notify"]["ok"] == 1 and t["read"]["ok"] >= 1 and t["radio_wait"]["ok"] >= 2 and t["radio_hold"]["ok"] == 1, (n, t)     # one wait for the connect, one per read
+    print("Persistent links, complete periodic reads, radio released between operations, timings recorded: OK")
 
     # ---- 2. a hung connect() is cut off, the radio is released and the others keep going
     s, c = make()
@@ -78,6 +81,9 @@ def main():
     assert wait(lambda: published(s, "BATTERY 1") and published(s, "BATTERY 3") and events("BATTERY 2", "connect_failed") >= 1)
     assert s._battery("BATTERY 2")["state"] in ("error", "scanning", "connecting"), s._battery("BATTERY 2")
     assert c.snapshot()["forced_releases"] == 0, "the connect deadline must fire before the coordinator has to take the radio back"
+    t = ble_log.snapshot()["counters"]["BATTERY 2"]["timings"]["connect"]
+    assert t["failed"] >= 1 and 0.3 <= t["max_failed_seconds"] <= 1.5 and t["ok"] == 0, t          # the time-out shows up as a failed sample of about CONNECT_TIMEOUT
+    assert any("s on the radio)" in e["detail"] for e in ble_log.snapshot(300)["events"] if e["device"] == "BATTERY 2" and e["kind"] == "connect_failed")
     assert wait(lambda: COUNT[("BATTERY 1", "write")] >= 18), "healthy batteries stopped reading while another one could not connect"
     s.stop()
     assert c.snapshot()["active"] is None

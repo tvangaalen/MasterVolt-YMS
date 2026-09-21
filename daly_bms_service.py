@@ -222,7 +222,8 @@ class _BatteryWorker:
 
     async def _drop(self,client):
         if client:
-            try:await asyncio.wait_for(client.disconnect(),timeout=DISCONNECT_TIMEOUT)
+            try:
+                with ble_log.timed(self.name,"disconnect"):await asyncio.wait_for(client.disconnect(),timeout=DISCONNECT_TIMEOUT)
             except asyncio.TimeoutError:ble_log.log(self.name,"disconnect_timeout",f"disconnect did not finish within {DISCONNECT_TIMEOUT:g} s (possible leaked Windows Bluetooth handle)",failure=True)
             except BaseException:pass
 
@@ -239,15 +240,17 @@ class _BatteryWorker:
         # Coordinator.acquire is deliberately blocking. Run it outside this
         # worker's event loop so completed BLE coroutines can always publish
         # their result back to the calling HTTP thread.
+        asked=time.monotonic()
         owns_slot=await asyncio.to_thread(
             bluetooth_coordinator.acquire,
             queue_kind,
             35 if queue_kind=="bms_manual_connect" else 25,
         )
+        ble_log.timing(self.name,"radio_wait",time.monotonic()-asked,bool(owns_slot))
         if not owns_slot:
             self.service._set_state(self.name,"waiting","Waiting for Bluetooth connection slot")
             return False
-        half_open=None
+        half_open=None;held_from=time.monotonic()
         try:
             self.service._wait_connection_pause()
             if self.device is None or self.connection_failures>=3:
@@ -268,8 +271,8 @@ class _BatteryWorker:
                 self.refresh_event.set()
             client=BleakClient(self.device,timeout=12,disconnected_callback=disconnected);half_open=client
             ble_log.log(self.name,"connect_try",quiet=True)
-            await asyncio.wait_for(client.connect(),timeout=CONNECT_TIMEOUT)
-            await asyncio.wait_for(client.start_notify(NOTIFY_UUID,self._notified),timeout=NOTIFY_TIMEOUT)
+            with ble_log.timed(self.name,"connect"):await asyncio.wait_for(client.connect(),timeout=CONNECT_TIMEOUT)
+            with ble_log.timed(self.name,"notify"):await asyncio.wait_for(client.start_notify(NOTIFY_UUID,self._notified),timeout=NOTIFY_TIMEOUT)
             self.client=client;half_open=None;self.connection_failures=0
             bluetooth_coordinator.mark_bms(self.name,True)
             self.service._set_state(self.name,"connected",None,device_name=self.device_name)
@@ -280,12 +283,14 @@ class _BatteryWorker:
             await self._disconnect()
             await self._drop(half_open)          # a client that connected but never finished starting notifications must not stay open
             message=f"{type(exc).__name__}: {str(exc).strip()}" if str(exc).strip() else f"{type(exc).__name__} (connect/notify did not finish in time)"
-            ble_log.log(self.name,"connect_failed",message,failure=True)
+            ble_log.log(self.name,"connect_failed",f"{message} (after {time.monotonic()-held_from:.1f} s on the radio)",failure=True)
             self.service._set_state(self.name,"error",str(exc) or f"{self.name} connection failed")
             return False
         finally:
             self.service._record_connection_attempt()
-            if owns_slot:bluetooth_coordinator.release(queue_kind,owns_slot)
+            if owns_slot:
+                ble_log.timing(self.name,"radio_hold",time.monotonic()-held_from,self.client is not None)
+                bluetooth_coordinator.release(queue_kind,owns_slot)
 
     async def _refresh(self,generation=0,manual=False):
         async with self.operation_lock:
@@ -295,17 +300,19 @@ class _BatteryWorker:
         if not self.client or not self.client.is_connected:
             self.completed_generation=max(self.completed_generation,generation);return False
         queue_kind="bms_manual_read" if manual else "bms_read"
+        asked=time.monotonic()
         owns_slot=radio_owned or await asyncio.to_thread(
             bluetooth_coordinator.acquire,
             queue_kind,
             35 if manual else 2,
         )
+        if not radio_owned:ble_log.timing(self.name,"radio_wait",time.monotonic()-asked,bool(owns_slot))
         if not owns_slot:
             self.refresh_event.set()
             return False
         try:
             self.service._set_state(self.name,"reading",None)
-            self.frames=[];self.stream=bytearray()
+            self.frames=[];self.stream=bytearray();read_started=time.monotonic()
             for index,command in enumerate(COMMANDS,1):
                 if radio_owned:self.service._control_progress(f"verifying values ({index}/9)")
                 attempts=2      # one retry for a single lost request before the whole link is torn down
@@ -337,6 +344,7 @@ class _BatteryWorker:
                     self.incomplete_streak+=1
                     message=f"{self.name} returned an incomplete status (no answer to {', '.join(f'0x{c:02X}' for c in missing)})"
                     ble_log.log(self.name,"read_incomplete",message,failure=True)
+                    ble_log.timing(self.name,"read",time.monotonic()-read_started,False)
                     if self.incomplete_streak>=INCOMPLETE_LIMIT:raise RuntimeError(f"{message} {self.incomplete_streak} times in a row")
                     self.service._set_state(self.name,"connected",message)
                     self.last_refresh=time.monotonic()-max(2,int(self.service._settings_getter()["bms_refresh_interval"]))+INCOMPLETE_RETRY_SECONDS   # look again shortly
@@ -346,6 +354,7 @@ class _BatteryWorker:
             self.service._set_snapshot(self.name,value)
             bluetooth_coordinator.mark_bms_refreshed(self.name)
             ble_log.log(self.name,"read_ok",success=True,quiet=True)
+            if not radio_owned:ble_log.timing(self.name,"read",time.monotonic()-read_started,True)
             self.last_refresh=time.monotonic();return True
         except BaseException as exc:
             message=f"{self.name} verification read failed: {str(exc).strip() or type(exc).__name__}"

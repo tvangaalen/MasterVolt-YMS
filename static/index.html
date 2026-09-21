@@ -355,7 +355,7 @@ function render(d){
  else if(floatEvent>lastFloatEvent){lastFloatEvent=floatEvent;$('floatInfoText').textContent=`House Battery SOC >= ${num(floatThreshold,Number.isInteger(floatThreshold)?0:1)}% Charger House, Alternator, and Solar have been switched to Float`;showFloatInfo()}
  if(lastBulkEvent===null)lastBulkEvent=bulkEvent;
  else if(bulkEvent>lastBulkEvent){lastBulkEvent=bulkEvent;const bulkSoc=Number(d.settings?.bulk_resume_soc??90);$('floatInfoText').textContent=`House Battery SOC <= ${num(bulkSoc,Number.isInteger(bulkSoc)?0:1)}% Charger House, Alternator, and Solar have been switched to Bulk`;showFloatInfo()}
- $('disc').textContent=`Cache ${d.cache_items} values · verified fixed field map · v1.12.0`;
+ $('disc').textContent=`Cache ${d.cache_items} values · verified fixed field map · v1.12.1`;
 }
 async function refresh(){if(busy)return;try{let r=await fetch('/api/energy',{cache:'no-store'}),d=await r.json();if(!r.ok)throw Error(d.detail||'request failed');render(d);$('offline').style.display='none';$('dot').className='dot';showErr('')}catch(e){if(lastGood)render(lastGood);$('offline').style.display='block';$('dot').className='dot off';showErr(e.message)}}
 async function post(u,p){busy=true;try{let r=await fetch(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)}),d=await r.json();if(!r.ok)throw Error(d.detail||'control failed')}catch(e){showErr(e.message)}finally{busy=false;refresh()}}

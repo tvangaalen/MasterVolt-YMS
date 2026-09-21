@@ -26,7 +26,7 @@ def fast(**overrides):
 
 def make(interval=0.3, retry=0.05, ready=True, **overrides):
     COUNT.clear(); BEHAVIOUR.clear(); PRESENT.clear(); PRESENT.update(NAMES)
-    ble_log.counters.clear(); ble_log.events.clear()
+    ble_log.clear()
     for name in NAMES: BEHAVIOUR[name] = {}
     fast(**overrides)
     coordinator = BluetoothCoordinator()
@@ -66,7 +66,12 @@ def main():
         assert COUNT[("scanner", "discover")] == 1, "known balancers must not be scanned for again"
         snap = s.snapshot()
         assert all(snap["devices"][n]["last_success_age_seconds"] is not None and not snap["devices"][n]["stale"] for n in NAMES)
-        print("Complete statuses only, device information read once, one scan for three balancers: OK")
+        timings = ble_log.snapshot()["counters"]["DL-BAL1"]["timings"]
+        for kind in ("connect", "notify", "read", "disconnect", "radio_hold", "radio_wait"):
+            assert timings[kind]["ok"] >= 2 and timings[kind]["avg_ok_seconds"] is not None and timings[kind]["p95_ok_seconds"] >= timings[kind]["p50_ok_seconds"], (kind, timings.get(kind))
+        assert timings["radio_hold"]["avg_ok_seconds"] >= timings["connect"]["avg_ok_seconds"], "the radio is held at least as long as the connect takes"
+        assert ble_log.snapshot()["counters"]["balancers"]["timings"]["scan"]["count"] == 1
+        print("Complete statuses only, device information read once, one scan for three balancers, timings recorded: OK")
 
         # ---- 2. an unanswered command is asked again within the same connection
         s, _ = make(interval=5)
@@ -98,6 +103,9 @@ def main():
         assert coordinator.snapshot()["active"] in (None, "balancer")
         s.stop()
         assert events("DL-BAL3", "read_failed") >= 1
+        hold = ble_log.snapshot()["counters"]["DL-BAL3"]["timings"]["radio_hold"]
+        assert hold["failed"] >= 1 and hold["max_failed_seconds"] >= 0.2, hold        # the hung write cost about GATT_TIMEOUT of radio time
+        assert any("s on the radio)" in e["detail"] for e in ble_log.snapshot(300)["events"] if e["device"] == "DL-BAL3" and e["kind"] == "read_failed")
         print("Hung GATT write: time-out, radio released, other balancers keep reading: OK")
 
         # ---- 5. exponential backoff for a failing balancer, healthy ones keep their own interval
