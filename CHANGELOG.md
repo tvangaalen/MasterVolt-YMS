@@ -10,6 +10,13 @@ Unless an entry says otherwise, every release also bumps the application version
 
 ---
 
+## 1.10 — History usability
+
+### 1.10.0
+- **Time range on the iPhone.** The overlapping two-handle slider (18 px targets) is replaced by touch-sized controls: preset buttons **4 h, 12 h, 24 h, 3 d, 7 d, All** (the active one is highlighted; presets longer than the available history are disabled) and a **Custom** panel with separate **From** and **To** sliders with 34 px thumbs. The *Last 4 hrs* header button is now the *4 h* preset.
+- **No more accidental page swipes.** The Dashboard ↔ BMS ↔ Balance ↔ History ↔ Settings swipe now ignores gestures that start on a slider, an input, the time-range block or a scrollable report table, so dragging a control no longer switches page.
+- **Stacked charts are smooth, even areas** instead of striped columns: bands are painted as solid colour on an offscreen layer (no seams) and composited once with light transparency. Positive values stack above zero and negative values below it, data gaps (for example the server being off) stay empty instead of showing a slope, and filtering on a legend item shows that component as an area with its smooth line. Applies to the Remaining, Load, Sources and Loads charts.
+
 ## 1.9 — Reports
 
 ### 1.9.1
