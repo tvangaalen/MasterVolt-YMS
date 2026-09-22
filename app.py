@@ -12,7 +12,7 @@ from daly_balancer_service import DalyBalancerService
 from history_service import HistoryService
 from bluetooth_coordinator import bluetooth_coordinator
 from ble_events import ble_log
-from house_soc import house_soc as _house_soc, max_age_seconds
+from house_soc import house_soc as _house_soc, cell_voltage_stats as _cell_voltage_stats, max_age_seconds
 from report_service import BatteryHealthReports
 
 BASE=Path(__file__).resolve().parent
@@ -53,10 +53,15 @@ def _history_loop():
 # Protection waits until the first valid DALY reading instead of acting on a
 # conflicting MasterShunt value during Bluetooth startup.
 def house_bms_soc_details():
-    """Average of every valid DALY SOC that is still fresh; the three BMSes form one house bank. A reading older than
-    max(120 s, 4 refresh intervals) is not used: Float protection must not act on a value the Bluetooth link stopped updating."""
+    """Average SOC plus the highest single cell voltage and worst cell spread, all from the same *fresh* DALY
+    readings; the three BMSes form one house bank. A reading older than max(120 s, 4 refresh intervals) is not
+    used: Float protection must not act on a value the Bluetooth link stopped updating. The cell-voltage figures
+    exist because the SOC average can lag badly behind an individual battery/cell (see house_soc.py, CHANGELOG 1.13.0)."""
     batteries=bms_service.snapshot().get("batteries",{})
-    return _house_soc(batteries,time.time(),max_age_seconds(bms_service._settings_getter()["bms_refresh_interval"]))
+    now=time.time();max_age=max_age_seconds(bms_service._settings_getter()["bms_refresh_interval"])
+    details=_house_soc(batteries,now,max_age)
+    details.update(_cell_voltage_stats(batteries,now,max_age))
+    return details
 
 def available_house_bms_soc():return house_bms_soc_details()["soc"]
 
@@ -131,7 +136,7 @@ async def lifespan(app):
     try: await asyncio.to_thread(balancer_service.stop)
     except: pass
 
-app=FastAPI(title="Mastervolt Energy",version="1.12.2",lifespan=lifespan)
+app=FastAPI(title="Mastervolt Energy",version="1.13.0",lifespan=lifespan)
 app.add_middleware(GZipMiddleware,minimum_size=1000)
 app.mount("/static",StaticFiles(directory=STATIC),name="static")
 
@@ -143,6 +148,8 @@ class SettingsReq(BaseModel):
     float_protection_enabled:bool
     house_battery_soc:float=Field(ge=50,le=100)
     bulk_resume_soc:float=Field(ge=0,le=95)
+    float_cell_trigger_mv:float=Field(ge=3300,le=3650)
+    float_cell_resume_mv:float=Field(ge=3200,le=3650)
     warning_popup_seconds:int=Field(ge=1,le=60)
     bms_refresh_interval:int=Field(ge=5,le=300)
     bms_popup_seconds:int=Field(ge=1,le=60)
@@ -180,6 +187,10 @@ async def energy():
             data["storage"]["house"]["soc_source"]="daly_bms_average" if soc is not None else ("daly_bms_stale" if details["stale_batteries"] else "daly_bms_unavailable")
             data["storage"]["house"]["soc_fresh_batteries"]=details["fresh_batteries"]
             data["storage"]["house"]["soc_age_seconds"]=details["youngest_age_seconds"]
+            data["storage"]["house"]["max_cell_mv"]=details.get("max_cell_mv")
+            data["storage"]["house"]["max_cell_battery"]=details.get("max_cell_battery")
+            data["storage"]["house"]["max_spread_mv"]=details.get("max_spread_mv")
+            data["storage"]["house"]["max_spread_battery"]=details.get("max_spread_battery")
         return data
     except Exception as e:raise HTTPException(503,detail=str(e))
 
