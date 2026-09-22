@@ -10,6 +10,40 @@ Unless an entry says otherwise, every release also bumps the application version
 
 ---
 
+## 1.13 — Float protection dual trigger
+
+### 1.13.0
+Analysis of 10 days of stored BMS history found 44 cell-voltage/cell-imbalance alarm episodes, several ending in the
+BMS itself cutting the charge MOSFET off - Float protection did not stop charging in time to prevent them. Root cause:
+Float watched only the *average* House SOC across the three parallel batteries, and one battery can reach a high
+individual SOC (its own coulomb counter can already read 100%) - with one of its cells already inside DALY's own
+high-voltage alarm band - while the average is still far below the 95% Float threshold (as low as 58-91% in the
+recorded episodes). No manufacturer alarm thresholds are read or changed; the fix works entirely from the app's own,
+independently-chosen cell-voltage figure.
+- **Float now has two independent triggers** (`house_soc.py`, `float_decision()`): the existing SOC average (default
+  95%, unchanged), **or** the highest single cell voltage across all three batteries reaching a new threshold
+  (default 3500 mV). Either is enough to force Float; a normal full-charge cell sits around 3360-3390 mV, and DALY's
+  own "Cell voltage high" alarm was observed starting around 3550-3600 mV, so 3500 mV acts with real margin on both
+  sides.
+- **Resume to Bulk needs both signals clear**: the SOC at or below *Switch to Bulk when SOC* (default 90%, unchanged)
+  **and** every cell at or below a new resume level (default 3420 mV). If either reading is unknown (stale Bluetooth
+  link) while Float is latched, it holds rather than resuming blind - this generalises the 1.12.0 freshness-hold to
+  the cell-voltage signal.
+- **Two new settings, adjustable on the Settings page** like the existing SOC pair: *Also switch to Float when a cell
+  reaches* (`float_cell_trigger_mv`, 3300-3650 mV) and *Switch to Bulk once every cell is at or below*
+  (`float_cell_resume_mv`, 3200-3650 mV, must be at least 30 mV below the trigger).
+- `high_soc_float_policy` (and `/api/energy`'s `storage.house`) gains `max_cell_mv`, `max_cell_battery`,
+  `max_spread_mv`, `max_spread_battery`, `cell_trigger_mv`, `cell_resume_mv` and `trigger` (`"soc"`, `"cell_voltage"`,
+  `"soc+cell_voltage"` or `"held"`, saying which condition forced Float). The Dashboard's Float pop-up now names the
+  actual reason instead of always citing the SOC threshold.
+- The per-battery **cell spread** (worst cell-to-cell difference within a battery) is now also reported for the same
+  reason, but is deliberately **informational only** - it is not wired into the trigger, so a brief, harmless
+  imbalance mid-charge cannot stall normal Bulk charging.
+- Control write paths, the verified Float/Bulk command sequences, the 20 s per-source retry and the 3 s check
+  interval are unchanged. New tests: `float_freshness_self_test.py` gained a cell-voltage part reproducing the
+  reported failure mode end-to-end (a low SOC average with a hot cell still forces Float; resume is blocked until
+  the cell cools; a stale cell reading holds rather than resumes blind) plus settings-validation checks.
+
 ## 1.12 — Bluetooth reliability
 
 ### 1.12.2

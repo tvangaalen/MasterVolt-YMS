@@ -31,7 +31,7 @@ py bluetooth_coordinator_self_test.py  # Bluetooth priority gate: tokens, max-ho
 py ble_events_self_test.py             # Bluetooth event log: counters, timing statistics, slow-connect logging
 py daly_bms_worker_self_test.py        # BMS monitoring workers on a simulated bleak (~25 s)
 py daly_balancer_self_test.py          # balancer service on a simulated bleak: time-outs, back-off, watchdog (~20 s)
-py float_freshness_self_test.py        # stale-SOC handling of the real Float-protection loop (stubbed hardware)
+py float_freshness_self_test.py        # Float's SOC/cell-voltage dual trigger and stale-data handling (stubbed hardware)
 py battery_health_self_test.py         # battery_health.py analysis on synthetic data
 py report_service_self_test.py         # Reports-tab job runner (separate process, one at a time, errors, timeout)
 py history_service_self_test.py        # History pie totals (HistoryService.contributions): energy, gaps, alarms, hourly totals
@@ -53,7 +53,7 @@ Delete `__pycache__` folders after running Python here; the project lives in Goo
 - New MasterBus/DALY behaviour goes through the existing service classes (`MasterBusService`, `DalyBmsService`, `DalyBalancerService`) and the shared `io_lock` / Bluetooth coordinator. Never open a second HID or BLE connection from a new code path.
 - Bluetooth work must go through `bluetooth_coordinator.py` using the existing priority order (user controls > manual refresh > auto reconnect > auto reads > balancers). Per-battery workers are failure-isolated; keep them so.
 - **Every Windows BLE call needs a hard deadline** (`asyncio.wait_for` around `connect`, `start_notify`, GATT writes, `disconnect`): a hung WinRT call otherwise freezes a whole worker loop. A client that connected but failed later must be disconnected. `acquire()` returns a token that `release()` must be given, and a lease that outlives its max-hold time is taken back. Log failures with `ble_events.ble_log` (`/api/bluetooth-events`). New Bluetooth logic is tested against the simulated `bleak` in `ble_fakes.py`, never with real hardware.
-- **Float protection only trusts a fresh SOC** (`house_soc.py`). Do not read `state_of_charge_percent` from the BMS snapshot directly for control decisions: use `available_house_bms_soc` / `house_bms_soc_details` in `app.py`. No MasterShunt fallback without the user's approval.
+- **Float protection only trusts fresh data** (`house_soc.py`). Do not read `state_of_charge_percent` or `cells_mv` from the BMS snapshot directly for control decisions: use `available_house_bms_soc` / `house_bms_soc_details` in `app.py`. Float has two independent triggers, SOC average and highest single cell voltage (either is enough to start Float; both must clear, with hysteresis, to resume Bulk) - see `house_soc.float_decision`. No MasterShunt fallback without the user's approval.
 - Settings live in `masterbus_service.py` (`self.settings`, `_validate_settings`), `app.py` (`SettingsReq`) and the Settings page. Add a setting in all three, validate on client and server, and give it a default that keeps existing `user_settings.json` files working.
 
 ## Releasing

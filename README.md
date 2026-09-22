@@ -1,6 +1,6 @@
 # MasterVolt YMS
 
-**Mastervolt Energy v1.12.2** — a private web app (installable iPhone PWA) that monitors and controls a boat's
+**Mastervolt Energy v1.13.0** — a private web app (installable iPhone PWA) that monitors and controls a boat's
 Mastervolt electrical system and its DALY battery management, from a Windows PC on the boat's LAN.
 
 - **MasterBus** over the Mastervolt USB Link: CombiMaster (shore power, inverter, charger), Solar ChargeMaster,
@@ -66,7 +66,7 @@ py show_control_maps.py
 - Only hardware-verified MasterBus fields are used; nothing is guessed at run time.
 - Engine ECU OFF needs an explicit confirmation whose default is *Keep ECU ON*, and no operating mode ever switches it off.
 - Controls write, then read back and verify; DALY writes are queued through one Bluetooth priority queue, with a pre-change backup written to `backups/`.
-- **High-SOC Float protection** runs on the server every 3 s (default: Float at 95% House SOC, back to Bulk at 90%). It only acts on a *fresh* DALY SOC (younger than 4 refresh intervals, at least 2 minutes); if the readings go stale while Float is active, the sources are kept in Float and Bulk is not resumed until fresh data returns.
+- **Float protection** runs on the server every 3 s and forces active charging sources to Float on **either** of two triggers (default: average House SOC >= 95%, **or** any single cell reaching 3500 mV - both settable). The cell-voltage trigger exists because three parallel batteries do not necessarily reach a high SOC together: one battery's own SOC estimate can already read 100%, with one of its cells already in DALY's own high-voltage alarm band, while the pack average is still far below the SOC threshold (see CHANGELOG 1.13.0). Bulk resumes only once the SOC and every cell are back within range; it only acts on *fresh* DALY data (younger than 4 refresh intervals, at least 2 minutes) and holds Float rather than resuming blind if the readings go stale.
 - The server listens only on a private RFC1918 address (or localhost). Nothing is published to the internet.
 
 ## Project layout
@@ -80,7 +80,7 @@ daly_bms_service.py        DALY BMS Bluetooth (persistent per-battery workers, M
 daly_balancer_service.py   DALY balancer Bluetooth (read-only; crash-proof worker with watchdog and back-off)
 bluetooth_coordinator.py   Process-wide Bluetooth priority queue (lease tokens, max-hold, degraded mode)
 ble_events.py              Bluetooth event log, per-device counters, connect/read timings and signal strength (logs/bluetooth.log, /api/bluetooth-events)
-house_soc.py               House SOC from the DALY readings with an age check (used by Float protection)
+house_soc.py               House SOC average and per-cell voltage/spread from the DALY readings, with an age check (Float protection's dual trigger)
 history_service.py         SQLite history and server-side chart cache
 static/                    index.html (SPA), PWA manifest + service worker, icons, cached product photos
 control_maps.json, device_maps.json, mastershunt_config_maps.json   Verified device/control mappings

@@ -107,19 +107,38 @@ subtracted from *Other DC Loads* so nothing is counted twice.
 `Pin = Pout / 0.85`, `Iin = Pin / Vin` (field 39). 85% is a deliberately conservative efficiency for its very low
 operating point.
 
-## High-SOC Float protection
+## Float protection (SOC and cell-voltage dual trigger)
 
-Runs server-side every 3 s, independent of any browser. When the DALY-average House SOC reaches *Switch to Float when
-SOC* (default 95%), active Charger House, Solar and Alternator charging is forced to Float and verified (20 s retry
-cooldown). It switches back to Bulk when SOC falls to *Switch to Bulk when SOC* (at least 5 points lower, default 90%).
-Inactive sources are never switched on, and the policy waits while no valid DALY SOC is available. Status is in
-`/api/energy` as `high_soc_float_policy`.
+Runs server-side every 3 s, independent of any browser. Active Charger House, Solar and Alternator charging is forced
+to Float and verified (20 s retry cooldown) as soon as **either** of two triggers fires:
 
-Only a *fresh* SOC counts (`house_soc.py`): each battery's reading must be younger than max(120 s, 4 x the BMS refresh
-interval). The SOC is the average of the fresh batteries; if none is fresh it is unknown. While Float is latched and the
-SOC is unknown the policy *holds*: sources that (re)start charging are still forced to Float, and Bulk is never resumed
-on old data (`soc_source` = `stale_hold`, plus `soc_stale`, `soc_fresh_batteries`, `soc_age_seconds`, `last_known_soc`).
-An unknown SOC never starts Float protection by itself. There is deliberately no MasterShunt fallback (see above).
+- the DALY-average House SOC reaches *Switch to Float when SOC* (default 95%), or
+- the highest single cell voltage of any of the three batteries reaches *Also switch to Float when a cell reaches*
+  (default 3500 mV, settings `float_cell_trigger_mv`).
+
+The cell-voltage trigger was added in 1.13.0 after 10 days of stored history showed 44 cell-voltage/imbalance alarm
+episodes (several ending in the BMS itself cutting the charge MOSFET) while the SOC average was as low as 58-91% -
+three parallel batteries do not necessarily reach a high SOC together, and one battery's own coulomb-counted SOC can
+already read 100%, with one of its cells already inside DALY's own high-voltage alarm band (observed starting around
+3550-3600 mV; a normal full-charge cell sits around 3360-3390 mV), while the pack average is nowhere near 95%. No DALY
+alarm-threshold registers are read or changed; 3500 mV is the app's own, independently-chosen figure.
+
+It switches back to Bulk only once **both** signals are back in range: SOC at or below *Switch to Bulk when SOC* (at
+least 5 points lower, default 90%) **and** every cell at or below *Switch to Bulk once every cell is at or below*
+(default 3420 mV, `float_cell_resume_mv`, at least 30 mV below the trigger). Inactive sources are never switched on.
+Status is in `/api/energy` as `high_soc_float_policy`, which also names which condition is active via `trigger`
+(`"soc"`, `"cell_voltage"`, `"soc+cell_voltage"` or `"held"`).
+
+Only *fresh* readings count (`house_soc.py`): each battery's reading must be younger than max(120 s, 4 x the BMS
+refresh interval). The SOC is the average of the fresh batteries, and the cell-voltage figures come from the same
+fresh set (`cell_voltage_stats()`); if none is fresh, both are unknown. While Float is latched and either signal is
+unknown the policy *holds*: sources that (re)start charging are still forced to Float, and Bulk is never resumed on
+old data (`soc_source` = `stale_hold`, plus `soc_stale`, `soc_fresh_batteries`, `soc_age_seconds`, `last_known_soc`,
+`max_cell_mv`, `max_cell_battery`). Neither an unknown SOC nor an unknown cell voltage ever starts Float protection by
+itself. The **cell spread** (worst cell-to-cell difference within a battery, `max_spread_mv`/`max_spread_battery`) is
+reported for the same reason but is deliberately informational only - not wired into the trigger, so a brief,
+harmless imbalance mid-charge cannot stall normal Bulk charging. There is deliberately no MasterShunt fallback (see
+above).
 
 ## DALY BMS / balancer notes
 
