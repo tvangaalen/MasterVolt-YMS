@@ -1,4 +1,4 @@
-const CACHE='mastervolt-v1.12.0-shell';
+const CACHE='mastervolt-v1.14.0-shell';
 const SHELL=['/','/static/index.html','/manifest.webmanifest','/static/icons/app-icon.svg'];
 self.addEventListener('install',e=>{e.waitUntil(caches.open(CACHE).then(c=>c.addAll(SHELL)));self.skipWaiting();});
 self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(k=>k!==CACHE).map(k=>caches.delete(k)))));self.clients.claim();});

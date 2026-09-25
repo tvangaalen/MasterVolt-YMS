@@ -10,13 +10,25 @@ Unless an entry says otherwise, every release also bumps the application version
 
 ---
 
-## 1.12 — History charts
+## 1.14 — History charts
 
-### 1.12.0
+### 1.14.0
+- Merges the changes that had been made directly in the live folder (see 1.13.0 below) with the History chart work, so the repository, GitHub and the running server are the same code again.
 - **History → Storage → Remaining:** the left axis is fixed at **0–1000 Ah** and a right axis shows **0–100 %**, where 100 % is the 960 Ah bank capacity (a dashed line marks 960 Ah, just below the top of the chart).
 - **History → Sources:** the *Charge current (A)* chart is removed because it repeated *Generated power*. That chart is now **Generated power (W / A)**: the amps are on a right-hand axis. The two units are linked through the average bus voltage of the period (total watts ÷ total amps, shown in the subtitle, typically about 13.5 V), and the dashed average line shows both units.
 - **History → Loads:** same change: *DC load current (A)* is removed and **DC consumption (W / A)** has the amps on the right axis.
 - The donut charts stay directly under the remaining chart of their tab (*Source contribution*, *Total per Consumer*).
+
+## 1.13 — Float protection on cell voltage, fresh data only, Bluetooth robustness
+
+Imported from the live folder (commit `3de09f3`): these versions (1.12.x–1.13.0, 21–23 Sep 2026) were made directly in
+`C:\Temp\mastervoltproject` and had no release notes. The entries below are reconstructed from the code and its comments.
+
+### 1.13.0
+- **Float protection also watches individual cells.** Float now starts when *either* the House SOC reaches its threshold *or* the highest single cell of any battery reaches the new **cell-voltage Float trigger** (default 3500 mV, allowed 3300–3650 mV), because the pack-average SOC can lag far behind one divergent cell. Bulk resumes only when both are back in range (**cell-voltage Bulk level**, default 3420 mV, allowed 3200–3650 mV, at least 30 mV below the trigger). The cell spread is informational only and never forces Float. The two levels are new fields on the Settings page, validated in the browser and on the server.
+- **Never act on old battery data.** `house_soc.py` computes the House SOC and the cell-voltage figures only from DALY readings that are fresh (younger than the larger of 120 s and 4 × the BMS refresh interval). If the SOC is missing or old while Float is latched, Float is *held* and Bulk is never resumed on old data; an unknown value never starts Float by itself. `/api/energy` reports the SOC source (`daly_bms_average`, `daly_bms_stale`, `daly_bms_unavailable`), the number of fresh batteries, the reading age, and the highest cell and worst spread with their battery; `high_soc_float_policy` also reports the trigger that started Float.
+- **Bluetooth event log.** `ble_events.py` records every connect, read, timeout and watchdog action to a rotating `logs/bluetooth.log` and an in-memory buffer, with per-device counters, timings and the signal strength (RSSI) seen in scans; available at `GET /api/bluetooth-events`.
+- **More robust DALY BMS and balancer links.** Hard deadlines on every connect, notification set-up, read and disconnect; exponential back-off for unreachable devices; unanswered status commands are repeated once and only *complete* statuses are published; a watchdog rebuilds a stalled balancer worker and a supervisor restarts a crashed one; cached GATT services on Windows. The Bluetooth coordinator got ticketed priorities with maximum hold times and an async lease. The Balance page marks data that is no longer updated.
 
 ## 1.11 — History totals
 

@@ -1,6 +1,6 @@
 # MasterVolt YMS
 
-**Mastervolt Energy v1.12.0** — a private web app (installable iPhone PWA) that monitors and controls a boat's
+**Mastervolt Energy v1.14.0** — a private web app (installable iPhone PWA) that monitors and controls a boat's
 Mastervolt electrical system and its DALY battery management, from a Windows PC on the boat's LAN.
 
 - **MasterBus** over the Mastervolt USB Link: CombiMaster (shore power, inverter, charger), Solar ChargeMaster,
@@ -66,7 +66,7 @@ py show_control_maps.py
 - Only hardware-verified MasterBus fields are used; nothing is guessed at run time.
 - Engine ECU OFF needs an explicit confirmation whose default is *Keep ECU ON*, and no operating mode ever switches it off.
 - Controls write, then read back and verify; DALY writes are queued through one Bluetooth priority queue, with a pre-change backup written to `backups/`.
-- **High-SOC Float protection** runs on the server every 3 s (default: Float at 95% House SOC, back to Bulk at 90%).
+- **Float protection** runs on the server every 3 s: Float starts at 95% House SOC *or* when any single cell reaches the cell-voltage trigger (default 3500 mV), and Bulk resumes only when both are back in range (90% and 3420 mV by default). It uses only fresh DALY readings and holds Float rather than resume on old data.
 - The server listens only on a private RFC1918 address (or localhost). Nothing is published to the internet.
 
 ## Project layout
@@ -79,6 +79,8 @@ masterbus_*.py             MasterBus USB protocol, service, control, discovery, 
 daly_bms_service.py        DALY BMS Bluetooth (persistent per-battery workers, MOS/SOC control)
 daly_balancer_service.py   DALY balancer Bluetooth (read-only)
 bluetooth_coordinator.py   Process-wide Bluetooth priority queue
+ble_events.py              Bluetooth event log and per-device counters (/api/bluetooth-events)
+house_soc.py               House SOC and cell-voltage statistics from fresh readings; Float decision
 history_service.py         SQLite history and server-side chart cache
 static/                    index.html (SPA), PWA manifest + service worker, icons, cached product photos
 control_maps.json, device_maps.json, mastershunt_config_maps.json   Verified device/control mappings
@@ -124,5 +126,5 @@ every control on your own installation.
 ## API
 
 Interactive docs are at `/docs` while the server runs. Main endpoints: `GET /api/energy`, `GET|POST /api/settings`,
-`GET /api/bms`, `GET /api/balancers`, `GET /api/bluetooth-coordinator`, `GET /api/history*`, and control routes under
+`GET /api/bms`, `GET /api/balancers`, `GET /api/bluetooth-coordinator`, `GET /api/bluetooth-events`, `GET /api/history*`, and control routes under
 `/api/control/*` and `/api/bms/*`.

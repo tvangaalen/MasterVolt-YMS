@@ -109,11 +109,19 @@ operating point.
 
 ## High-SOC Float protection
 
-Runs server-side every 3 s, independent of any browser. When the DALY-average House SOC reaches *Switch to Float when
-SOC* (default 95%), active Charger House, Solar and Alternator charging is forced to Float and verified (20 s retry
-cooldown). It switches back to Bulk when SOC falls to *Switch to Bulk when SOC* (at least 5 points lower, default 90%).
-Inactive sources are never switched on, and the policy waits while no valid DALY SOC is available. Status is in
-`/api/energy` as `high_soc_float_policy`.
+Runs server-side every 3 s, independent of any browser. Float starts when **either** the DALY-average House SOC reaches
+*Switch to Float when SOC* (default 95%) **or** the highest single cell of any battery reaches the *cell-voltage Float
+trigger* (default 3500 mV): a divergent cell can reach the danger zone long before the pack average does. Active Charger
+House, Solar and Alternator charging is then forced to Float and verified (20 s retry cooldown). It switches back to Bulk
+only when **both** the SOC has fallen to *Switch to Bulk when SOC* (at least 5 points lower, default 90%) **and** every
+cell is at or below the *cell-voltage Bulk level* (default 3420 mV, at least 30 mV below the trigger). Inactive sources
+are never switched on.
+
+SOC and cell voltages count only when the DALY readings are fresh (younger than max(120 s, 4 x the BMS refresh
+interval), see `house_soc.py`). Old or missing data never starts Float by itself, and while Float is latched it *holds*
+Float instead of resuming Bulk blind. The cell spread is informational only. Status, including the reason Float is
+active (`trigger`: `soc`, `cell_voltage`, `soc+cell_voltage`, `held`), is in `/api/energy` as `high_soc_float_policy`.
+This is safety-critical code: change `float_decision()` only on explicit request and with tests.
 
 ## DALY BMS / balancer notes
 
