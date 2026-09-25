@@ -11,12 +11,25 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from bluetooth_coordinator import bluetooth_coordinator
+from ble_events import ble_log
 
 NOTIFY_UUID = "0000fff1-0000-1000-8000-00805f9b34fb"
 WRITE_UUID = "0000fff2-0000-1000-8000-00805f9b34fb"
 COMMANDS = range(0x90, 0x99)
 DEVICE_NAMES = ("BATTERY 1", "BATTERY 2", "BATTERY 3")
 CONTROL_WATCHDOG_SECONDS = 120
+CONNECT_TIMEOUT = 18.0        # hard deadline for connect and for start_notify: a hung Windows call must not hold the radio
+NOTIFY_TIMEOUT = 7.0
+DISCONNECT_TIMEOUT = 5.0
+BMS_MAX_BACKOFF = 60.0        # a battery that cannot be reached is retried after retry*2^n seconds, at most this long
+INCOMPLETE_LIMIT = 3          # consecutive incomplete status reads before the link is rebuilt
+INCOMPLETE_RETRY_SECONDS = 10.0
+GATT_TIMEOUT = 4.0            # every status request; a lost request is retried once before the link is torn down
+COMMAND_SPACING = 0.25
+REPLY_WAIT = 1.0
+RETRY_REPLY_WAIT = 0.6
+STARTUP_STAGGER = 1.0         # seconds between the starts of the three battery workers
+CONNECTION_PAUSE = 1.0        # minimum time between two connection attempts of any battery
 SOC_DISCHARGING_POINTS = ((2500,0),(3000,10),(3200,20),(3220,30),(3250,40),(3260,50),(3270,60),(3300,70),(3320,80),(3350,90),(3400,100))
 SOC_CHARGING_POINTS = ((2750,0),(3000,10),(3100,20),(3200,30),(3250,40),(3300,50),(3350,60),(3400,70),(3450,80),(3500,90),(3600,100))
 
@@ -173,337 +186,6 @@ def snapshot_from_frames(name_fragment: str,device_name: str,frames: list[bytes]
     }
 
 
-class _LegacyDalyBmsService:
-    def __init__(self):
-        self.lock=threading.RLock()
-        self.busy=False
-        self.refresh_started_at=None
-        self.batteries={name:{"state":"not_read","battery":name} for name in DEVICE_NAMES}
-        self._thread=None
-        self._stop_requested=threading.Event()
-        self._refresh_requested=threading.Event()
-        self._settings_getter=lambda:{"bms_refresh_interval":10,"bms_connection_retry_seconds":5}
-        self._clients={}
-        self._streams={}
-        self._frames={}
-        self._device_names={}
-        self._known_devices={}
-        self._connection_failures={name:0 for name in DEVICE_NAMES}
-        self._loop=None
-        self._operation_lock=None
-        self.backup_dir=Path(__file__).resolve().parent/"backups"
-
-    def start(self,settings_getter):
-        with self.lock:
-            if self._thread and self._thread.is_alive():return
-            self._settings_getter=settings_getter
-            self._stop_requested.clear()
-            self._thread=threading.Thread(target=self._thread_main,daemon=True,name="daly-bms-persistent")
-            self._thread.start()
-
-    def stop(self):
-        self._stop_requested.set();self._refresh_requested.set()
-        thread=self._thread
-        if thread and thread.is_alive():thread.join(timeout=12)
-
-    def _thread_main(self):
-        try:asyncio.run(self._run())
-        except Exception as exc:
-            with self.lock:
-                for name in DEVICE_NAMES:
-                    previous=self.batteries.get(name,{})
-                    self.batteries[name]={**previous,"battery":name,"state":"error","error":str(exc)}
-                self.busy=False
-
-    def snapshot(self):
-        with self.lock:
-            clients=list(self._clients.values())
-            return {
-                "busy":self.busy,"refresh_started_at":self.refresh_started_at,
-                "batteries":{name:dict(value) for name,value in self.batteries.items()},
-                "read_only":False,"controls_available":True,
-                "ble_available":importlib.util.find_spec("bleak") is not None,
-                "persistent_connections":True,
-                "connected_count":sum(1 for client in clients if client.is_connected),
-                "refresh_interval_seconds":int(self._settings_getter()["bms_refresh_interval"]),
-                "connection_retry_interval_seconds":int(self._settings_getter()["bms_connection_retry_seconds"]),
-            }
-
-    def refresh_all(self):
-        self._refresh_requested.set()
-        return {"started":True,"parallel":True}
-
-    def control(self,name:str,action:str,enabled:bool|None=None):
-        if name not in DEVICE_NAMES:raise ValueError("Unknown battery")
-        if action not in {"set_soc_100","set_soc_accurate","charge","discharge"}:raise ValueError("Unknown BMS action")
-        with self.lock:
-            client=self._clients.get(name);latest=dict(self.batteries.get(name,{}))
-            if not client or not client.is_connected or latest.get("state")!="connected":
-                raise RuntimeError(f"{name} must be connected and refreshed before changing it")
-            if action=="set_soc_accurate" and not latest.get("cells_mv"):
-                raise RuntimeError(f"{name} has no cell-voltage data")
-            if self.busy:raise RuntimeError("A BMS update is already in progress")
-            self.backup_dir.mkdir(exist_ok=True)
-            stamp=datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-            path=self.backup_dir/f'{name.lower().replace(" ","_")}_backup_{stamp}.json'
-            path.write_text(json.dumps(latest,indent=2)+"\n",encoding="utf-8")
-            self.busy=True
-        if not self._loop or not self._loop.is_running():
-            with self.lock:self.busy=False
-            raise RuntimeError("BMS background connection is not running")
-        future=asyncio.run_coroutine_threadsafe(self._perform_control(name,action,enabled),self._loop)
-        return future.result(timeout=20)
-
-    def control_all(self,action:str):
-        if action not in {"set_soc_100","set_soc_accurate","charge_on","charge_off","discharge_on","discharge_off"}:raise ValueError("Unknown BMS action")
-        with self.lock:
-            for name in DEVICE_NAMES:
-                client=self._clients.get(name);latest=self.batteries.get(name,{})
-                if not client or not client.is_connected or latest.get("state")!="connected":
-                    raise RuntimeError("All three batteries must be connected before changing all SOC values")
-                if action=="set_soc_accurate" and not latest.get("cells_mv"):
-                    raise RuntimeError(f"{name} has no cell-voltage data")
-            if self.busy:raise RuntimeError("A BMS update is already in progress")
-            self.backup_dir.mkdir(exist_ok=True)
-            stamp=datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-            for name in DEVICE_NAMES:
-                path=self.backup_dir/f'{name.lower().replace(" ","_")}_backup_{stamp}.json'
-                path.write_text(json.dumps(self.batteries[name],indent=2)+"\n",encoding="utf-8")
-            self.busy=True
-        future=asyncio.run_coroutine_threadsafe(self._perform_control_all(action),self._loop)
-        return future.result(timeout=40)
-
-    async def _run(self):
-        if importlib.util.find_spec("bleak") is None:
-            raise RuntimeError("Windows Bluetooth component 'bleak' is unavailable")
-        self._loop=asyncio.get_running_loop();self._operation_lock=asyncio.Lock()
-        while not self._stop_requested.is_set():
-            self._refresh_requested.clear()
-            try:
-                # Always refresh healthy sessions before attempting a missing
-                # connection. A troublesome BMS must not starve good devices.
-                await self._refresh_connected()
-                connected_new=await self._connect_missing()
-                if connected_new:await self._refresh_connected()
-            except Exception as exc:
-                with self.lock:
-                    for name in DEVICE_NAMES:
-                        if name not in self._clients:
-                            previous=self.batteries.get(name,{})
-                            self.batteries[name]={**previous,"battery":name,"state":"error","error":str(exc)}
-            settings=self._settings_getter()
-            missing=any(name not in self._clients or not self._clients[name].is_connected for name in DEVICE_NAMES)
-            interval=int(settings["bms_connection_retry_seconds"] if missing else settings["bms_refresh_interval"])
-            interval=max(1,min(300,interval))
-            for _ in range(interval*2):
-                if self._stop_requested.is_set() or self._refresh_requested.is_set():break
-                await asyncio.sleep(.5)
-        await self._disconnect_all()
-        self._loop=None
-
-    async def _perform_control(self,name,action,enabled):
-        latest=self.batteries.get(name,{})
-        cells=latest.get("cells_mv") or []
-        accurate_soc=soc_from_average_mv(sum(cells)/len(cells)) if cells else None
-        commands={
-            "set_soc_100":(0x21,b"\0"*6+(1000).to_bytes(2,"big")),
-            "set_soc_accurate":(0x21,b"\0"*6+int(round((accurate_soc or 0)*10)).to_bytes(2,"big")),
-            "charge":(0xDA,b"\x01" if enabled else b"\x00"),
-            "discharge":(0xD9,b"\x01" if enabled else b"\x00"),
-        }
-        if action=="set_soc_accurate" and accurate_soc is None:raise RuntimeError(f"{name} has no cell-voltage data")
-        command,payload=commands[action]
-        try:
-            async with self._operation_lock:
-                client=self._clients.get(name)
-                if not client or not client.is_connected:raise RuntimeError(f"{name} Bluetooth connection was lost")
-                await client.write_gatt_char(WRITE_UUID,write_frame(command,payload),response=False)
-                await asyncio.sleep(1)
-            await self._refresh_connected()
-            return {"changed":True,"battery":name,"action":action,"enabled":enabled,"refresh_complete":True}
-        except Exception:
-            with self.lock:self.busy=False
-            raise
-
-    async def _perform_control_all(self,action):
-        try:
-            async with self._operation_lock:
-                results={}
-                for name in DEVICE_NAMES:
-                    client=self._clients[name];cells=self.batteries[name].get("cells_mv") or []
-                    if action=="set_soc_accurate" and not cells:raise RuntimeError(f"{name} has no cell-voltage data")
-                    if action in {"set_soc_100","set_soc_accurate"}:
-                        soc=100.0 if action=="set_soc_100" else soc_from_average_mv(sum(cells)/len(cells))
-                        command=0x21;payload=b"\0"*6+int(round(soc*10)).to_bytes(2,"big");results[name]=round(soc,1)
-                    else:
-                        charge_action=action.startswith("charge_")
-                        enabled=action.endswith("_on")
-                        command=0xDA if charge_action else 0xD9;payload=b"\x01" if enabled else b"\x00";results[name]=enabled
-                    await client.write_gatt_char(WRITE_UUID,write_frame(command,payload),response=False)
-                    await asyncio.sleep(.5)
-                await asyncio.sleep(1)
-            await self._refresh_connected()
-            return {"changed":True,"action":action,"soc_percent":results,"refresh_complete":True}
-        except Exception:
-            with self.lock:self.busy=False
-            raise
-
-    def _set_connection_state(self,name,state,error=None,**values):
-        """Update connection state without discarding the last good reading."""
-        with self.lock:
-            previous=self.batteries.get(name,{})
-            self.batteries[name]={**previous,**values,"battery":name,"state":state,"error":error}
-
-    async def _disconnect_quietly(self,client):
-        """Disconnect without ever blocking the connection queue."""
-        try:
-            task=asyncio.create_task(client.disconnect())
-            done,_pending=await asyncio.wait({task},timeout=3)
-            if task not in done:task.cancel()
-            elif not task.cancelled():task.exception()
-        except BaseException:
-            pass
-
-    async def _connect_with_deadline(self,client,name,timeout_seconds=12):
-        """Bound a WinRT connect even when Bleak cancellation itself stalls."""
-        task=asyncio.create_task(client.connect())
-        done,_pending=await asyncio.wait({task},timeout=timeout_seconds)
-        if task in done:
-            return task.result()
-
-        # Do not await cancellation: some Windows WinRT calls do not acknowledge
-        # it promptly. Advancing the queue is more important than waiting for a
-        # wedged handshake. If it completes late, immediately close that client.
-        task.cancel()
-        def close_late(completed):
-            try:
-                if not completed.cancelled():completed.exception()
-            except BaseException:
-                pass
-            loop=self._loop
-            if getattr(client,"is_connected",False) and loop and not loop.is_closed():
-                loop.create_task(self._disconnect_quietly(client))
-        task.add_done_callback(close_late)
-        raise TimeoutError(f"{name} connection timed out after {timeout_seconds} seconds; retrying automatically")
-
-    async def _discover_missing(self,missing,scanner):
-        """Resolve all missing names in one scan, reusing healthy cached devices."""
-        scan_names=[name for name in missing if name not in self._known_devices or self._connection_failures.get(name,0)>=3]
-        matches={name:self._known_devices[name] for name in missing if name in self._known_devices and name not in scan_names}
-        if not scan_names:return matches
-        discovered=await scanner.discover(timeout=12,return_adv=True)
-        records=list(discovered.values()) if isinstance(discovered,dict) else [(device,None) for device in discovered]
-        for name in scan_names:
-            for device,advertisement in records:
-                visible_name=(getattr(advertisement,"local_name",None) or getattr(device,"name",None) or "")
-                if name.casefold() in visible_name.casefold():
-                    matches[name]=(device,visible_name)
-                    self._known_devices[name]=(device,visible_name)
-                    self._connection_failures[name]=0
-                    break
-        return matches
-
-    async def _connect_one(self,name,match,client_class):
-        """Open one persistent GATT session; never block the next battery forever."""
-        if not match:
-            self._connection_failures[name]=self._connection_failures.get(name,0)+1
-            self._set_connection_state(name,"error",f"{name} was not found. Wake it and close the DALY phone app.")
-            return False
-        device,visible_name=match
-        self._set_connection_state(name,"connecting",None,device_name=visible_name)
-
-        def disconnected(_client):
-            with self.lock:
-                if self._clients.get(name) is _client:self._clients.pop(name,None)
-            self._set_connection_state(name,"disconnected","Bluetooth connection lost; reconnecting automatically")
-            self._refresh_requested.set()
-
-        client=client_class(device,timeout=12,disconnected_callback=disconnected)
-        try:
-            await self._connect_with_deadline(client,name,12)
-            notify_task=asyncio.create_task(client.start_notify(NOTIFY_UUID,self._notification_handler(name)))
-            done,_pending=await asyncio.wait({notify_task},timeout=6)
-            if notify_task not in done:
-                notify_task.cancel()
-                raise TimeoutError(f"{name} notification setup timed out; retrying automatically")
-            notify_task.result()
-        except Exception as exc:
-            self._connection_failures[name]=self._connection_failures.get(name,0)+1
-            await self._disconnect_quietly(client)
-            self._set_connection_state(name,"error",str(exc))
-            return False
-
-        self._streams[name]=bytearray();self._frames[name]=[];self._device_names[name]=visible_name
-        with self.lock:self._clients[name]=client
-        self._connection_failures[name]=0
-        self._set_connection_state(name,"connected",None)
-        return True
-
-    async def _connect_missing(self):
-        """Connect missing batteries strictly 1, 2, 3 with a short settling pause."""
-        missing=[name for name in DEVICE_NAMES if name not in self._clients or not self._clients[name].is_connected]
-        if not missing:return False
-        from bleak import BleakClient,BleakScanner
-        for name in missing:self._set_connection_state(name,"scanning",None)
-        matches=await self._discover_missing(missing,BleakScanner)
-        connected_new=False
-        for index,name in enumerate(missing):
-            connected_new=await self._connect_one(name,matches.get(name),BleakClient) or connected_new
-            if index<len(missing)-1:await asyncio.sleep(1.0)
-        return connected_new
-
-    def _notification_handler(self,name):
-        def notified(_sender,payload):
-            stream=self._streams.setdefault(name,bytearray());stream.extend(payload)
-            while len(stream)>=13:
-                try:start=stream.index(0xA5)
-                except ValueError:stream.clear();return
-                if start:del stream[:start]
-                if len(stream)<13:return
-                frame=bytes(stream[:13])
-                if frame[3]==8 and (sum(frame[:12])&0xFF)==frame[12]:
-                    self._frames.setdefault(name,[]).append(frame);del stream[:13]
-                else:del stream[0]
-        return notified
-
-    async def _refresh_connected(self):
-        async with self._operation_lock:
-            await self._refresh_connected_unlocked()
-
-    async def _refresh_connected_unlocked(self):
-        connected=[name for name,client in self._clients.items() if client.is_connected]
-        if not connected:return
-        with self.lock:
-            self.busy=True;self.refresh_started_at=datetime.now(timezone.utc).isoformat()
-            for name in connected:
-                previous=self.batteries.get(name,{})
-                self.batteries[name]={**previous,"battery":name,"state":"reading","error":None}
-        async def refresh_one(name):
-            client=self._clients[name];self._frames[name]=[]
-            try:
-                for command in COMMANDS:
-                    await client.write_gatt_char(WRITE_UUID,request(command),response=False)
-                    await asyncio.sleep(.25)
-                await asyncio.sleep(1)
-                value=snapshot_from_frames(name,self._device_names.get(name,name),list(self._frames[name]))
-            except Exception as exc:
-                with self.lock:
-                    previous=self.batteries.get(name,{})
-                    self.batteries[name]={**previous,"battery":name,"state":"error","error":str(exc)}
-                try:await client.disconnect()
-                except Exception:pass
-            else:
-                with self.lock:self.batteries[name]=value
-        try:await asyncio.gather(*(refresh_one(name) for name in connected))
-        finally:
-            with self.lock:self.busy=False
-
-    async def _disconnect_all(self):
-        with self.lock:
-            clients=list(self._clients.values());self._clients={}
-        await asyncio.gather(*(client.disconnect() for client in clients),return_exceptions=True)
-
-
 class _BatteryWorker:
     """One isolated Windows/Bleak event loop for one DALY battery."""
     def __init__(self,service,name,index):
@@ -511,7 +193,7 @@ class _BatteryWorker:
         self.thread=None;self.loop=None;self.client=None;self.device=None;self.device_name=name
         self.stop_event=threading.Event();self.refresh_event=threading.Event()
         self.stream=bytearray();self.frames=[];self.last_refresh=0.0
-        self.completed_generation=0;self.connection_failures=0;self.operation_lock=None
+        self.completed_generation=0;self.connection_failures=0;self.incomplete_streak=0;self.operation_lock=None
 
     def start(self):
         self.stop_event.clear()
@@ -538,12 +220,17 @@ class _BatteryWorker:
             if frame[3]==8 and (sum(frame[:12])&0xFF)==frame[12]:self.frames.append(frame);del self.stream[:13]
             else:del self.stream[0]
 
+    async def _drop(self,client):
+        if client:
+            try:
+                with ble_log.timed(self.name,"disconnect"):await asyncio.wait_for(client.disconnect(),timeout=DISCONNECT_TIMEOUT)
+            except asyncio.TimeoutError:ble_log.log(self.name,"disconnect_timeout",f"disconnect did not finish within {DISCONNECT_TIMEOUT:g} s (possible leaked Windows Bluetooth handle)",failure=True)
+            except BaseException:pass
+
     async def _disconnect(self):
         client=self.client;self.client=None
         bluetooth_coordinator.mark_bms(self.name,False)
-        if client:
-            try:await asyncio.wait_for(client.disconnect(),timeout=3)
-            except BaseException:pass
+        await self._drop(client)
 
     async def _connect(self,queue_kind="bms"):
         from bleak import BleakClient,BleakScanner
@@ -553,45 +240,57 @@ class _BatteryWorker:
         # Coordinator.acquire is deliberately blocking. Run it outside this
         # worker's event loop so completed BLE coroutines can always publish
         # their result back to the calling HTTP thread.
+        asked=time.monotonic()
         owns_slot=await asyncio.to_thread(
             bluetooth_coordinator.acquire,
             queue_kind,
             35 if queue_kind=="bms_manual_connect" else 25,
         )
+        ble_log.timing(self.name,"radio_wait",time.monotonic()-asked,bool(owns_slot))
         if not owns_slot:
             self.service._set_state(self.name,"waiting","Waiting for Bluetooth connection slot")
             return False
+        half_open=None;held_from=time.monotonic()
         try:
             self.service._wait_connection_pause()
             if self.device is None or self.connection_failures>=3:
-                found=await BleakScanner.find_device_by_filter(
-                    lambda device,advertisement:self.name.casefold() in (
-                        getattr(advertisement,"local_name",None) or getattr(device,"name",None) or ""
-                    ).casefold(),timeout=10
-                )
+                def wanted(device,advertisement):
+                    hit=self.name.casefold() in (getattr(advertisement,"local_name",None) or getattr(device,"name",None) or "").casefold()
+                    if hit and isinstance(getattr(advertisement,"rssi",None),int):ble_log.rssi(self.name,advertisement.rssi)
+                    return hit
+                found=await BleakScanner.find_device_by_filter(wanted,timeout=10)
                 if found is None:raise RuntimeError(f"{self.name} was not found. Wake it and close the DALY phone app.")
                 self.device=found;self.device_name=getattr(found,"name",None) or self.name;self.connection_failures=0
             self.service._set_state(self.name,"connecting",None,device_name=self.device_name)
             def disconnected(client):
-                if self.client is client:self.client=None
+                if self.client is client:
+                    self.client=None
+                    ble_log.log(self.name,"link_lost","the Bluetooth link dropped",failure=True)
                 bluetooth_coordinator.mark_bms(self.name,False)
                 self.service._set_state(self.name,"disconnected","Bluetooth connection lost; reconnecting automatically")
                 self.refresh_event.set()
-            client=BleakClient(self.device,timeout=12,disconnected_callback=disconnected)
-            await client.connect()
-            await client.start_notify(NOTIFY_UUID,self._notified)
-            self.client=client;self.connection_failures=0
+            client=BleakClient(self.device,timeout=12,disconnected_callback=disconnected);half_open=client
+            ble_log.log(self.name,"connect_try",quiet=True)
+            with ble_log.timed(self.name,"connect"):await asyncio.wait_for(client.connect(),timeout=CONNECT_TIMEOUT)
+            with ble_log.timed(self.name,"notify"):await asyncio.wait_for(client.start_notify(NOTIFY_UUID,self._notified),timeout=NOTIFY_TIMEOUT)
+            self.client=client;half_open=None;self.connection_failures=0
             bluetooth_coordinator.mark_bms(self.name,True)
             self.service._set_state(self.name,"connected",None,device_name=self.device_name)
+            ble_log.log(self.name,"connect_ok",success=True,quiet=True)
             return True
         except BaseException as exc:
             self.connection_failures+=1
             await self._disconnect()
+            await self._drop(half_open)          # a client that connected but never finished starting notifications must not stay open
+            message=f"{type(exc).__name__}: {str(exc).strip()}" if str(exc).strip() else f"{type(exc).__name__} (connect/notify did not finish in time)"
+            ble_log.log(self.name,"connect_failed",f"{message} (after {time.monotonic()-held_from:.1f} s on the radio)",failure=True)
             self.service._set_state(self.name,"error",str(exc) or f"{self.name} connection failed")
             return False
         finally:
             self.service._record_connection_attempt()
-            if owns_slot:bluetooth_coordinator.release(queue_kind)
+            if owns_slot:
+                ble_log.timing(self.name,"radio_hold",time.monotonic()-held_from,self.client is not None)
+                bluetooth_coordinator.release(queue_kind,owns_slot)
 
     async def _refresh(self,generation=0,manual=False):
         async with self.operation_lock:
@@ -601,33 +300,61 @@ class _BatteryWorker:
         if not self.client or not self.client.is_connected:
             self.completed_generation=max(self.completed_generation,generation);return False
         queue_kind="bms_manual_read" if manual else "bms_read"
+        asked=time.monotonic()
         owns_slot=radio_owned or await asyncio.to_thread(
             bluetooth_coordinator.acquire,
             queue_kind,
             35 if manual else 2,
         )
+        if not radio_owned:ble_log.timing(self.name,"radio_wait",time.monotonic()-asked,bool(owns_slot))
         if not owns_slot:
             self.refresh_event.set()
             return False
         try:
             self.service._set_state(self.name,"reading",None)
-            self.frames=[];self.stream=bytearray()
+            self.frames=[];self.stream=bytearray();read_started=time.monotonic()
             for index,command in enumerate(COMMANDS,1):
                 if radio_owned:self.service._control_progress(f"verifying values ({index}/9)")
-                attempts=2 if radio_owned or manual else 1
+                attempts=2      # one retry for a single lost request before the whole link is torn down
                 for attempt in range(1,attempts+1):
                     try:
-                        await asyncio.wait_for(self.client.write_gatt_char(WRITE_UUID,request(command),response=False),timeout=4)
+                        await asyncio.wait_for(self.client.write_gatt_char(WRITE_UUID,request(command),response=False),timeout=GATT_TIMEOUT)
                         break
                     except asyncio.TimeoutError:
                         if attempt>=attempts:raise
                         if radio_owned:self.service._control_progress(f"verification {index}/9 timed out; retrying")
                         await asyncio.sleep(.3)
-                await asyncio.sleep(.25)
-            await asyncio.sleep(1)
+                await asyncio.sleep(COMMAND_SPACING)
+            await asyncio.sleep(REPLY_WAIT)
+            if not radio_owned:
+                # Monitoring reads only: ask once more for commands that were not answered, and never publish a partial
+                # status (missing cells or temperatures would leave holes in the history). Control verification keeps
+                # its own strict behaviour below.
+                answered={frame[2] for frame in list(self.frames)}
+                missing=[command for command in COMMANDS if command not in answered]
+                if missing:
+                    ble_log.log(self.name,"read_retry",f"no answer to {', '.join(f'0x{c:02X}' for c in missing)}")
+                    for command in missing:
+                        await asyncio.wait_for(self.client.write_gatt_char(WRITE_UUID,request(command),response=False),timeout=GATT_TIMEOUT)
+                        await asyncio.sleep(COMMAND_SPACING)
+                    await asyncio.sleep(RETRY_REPLY_WAIT)
+                    answered={frame[2] for frame in list(self.frames)}
+                    missing=[command for command in COMMANDS if command not in answered]
+                if missing:
+                    self.incomplete_streak+=1
+                    message=f"{self.name} returned an incomplete status (no answer to {', '.join(f'0x{c:02X}' for c in missing)})"
+                    ble_log.log(self.name,"read_incomplete",message,failure=True)
+                    ble_log.timing(self.name,"read",time.monotonic()-read_started,False)
+                    if self.incomplete_streak>=INCOMPLETE_LIMIT:raise RuntimeError(f"{message} {self.incomplete_streak} times in a row")
+                    self.service._set_state(self.name,"connected",message)
+                    self.last_refresh=time.monotonic()-max(2,int(self.service._settings_getter()["bms_refresh_interval"]))+INCOMPLETE_RETRY_SECONDS   # look again shortly
+                    return False
+                self.incomplete_streak=0
             value=snapshot_from_frames(self.name,self.device_name,list(self.frames))
             self.service._set_snapshot(self.name,value)
             bluetooth_coordinator.mark_bms_refreshed(self.name)
+            ble_log.log(self.name,"read_ok",success=True,quiet=True)
+            if not radio_owned:ble_log.timing(self.name,"read",time.monotonic()-read_started,True)
             self.last_refresh=time.monotonic();return True
         except BaseException as exc:
             message=f"{self.name} verification read failed: {str(exc).strip() or type(exc).__name__}"
@@ -636,7 +363,7 @@ class _BatteryWorker:
             if raise_on_error:raise RuntimeError(message) from exc
             return False
         finally:
-            if not radio_owned:bluetooth_coordinator.release(queue_kind)
+            if not radio_owned:bluetooth_coordinator.release(queue_kind,owns_slot)
             self.completed_generation=max(self.completed_generation,generation)
 
     async def control(self,action,enabled):
@@ -745,7 +472,7 @@ class _BatteryWorker:
             return {"changed":True,"battery":self.name,"action":action,"enabled":enabled,"soc_percent":selected}
 
     async def _run(self):
-        self.loop=asyncio.get_running_loop();self.operation_lock=asyncio.Lock();await asyncio.sleep(self.index)
+        self.loop=asyncio.get_running_loop();self.operation_lock=asyncio.Lock();await asyncio.sleep(self.index*STARTUP_STAGGER)
         while not self.stop_event.is_set():
             # A user control owns the shared Bluetooth radio until its result
             # has reached the HTTP thread. Starting a background refresh here
@@ -764,7 +491,7 @@ class _BatteryWorker:
                 interval=max(2,int(self.service._settings_getter()["bms_refresh_interval"]))
                 if requested or time.monotonic()-self.last_refresh>=interval:await self._refresh(generation,manual=manual)
             retry=max(1,int(self.service._settings_getter()["bms_connection_retry_seconds"]))
-            wait=.25 if self.client and self.client.is_connected else retry
+            wait=.25 if self.client and self.client.is_connected else min(BMS_MAX_BACKOFF,retry*2**min(max(0,self.connection_failures-1),6))
             for _ in range(max(1,int(wait*4))):
                 if self.stop_event.is_set() or self.refresh_event.is_set():break
                 await asyncio.sleep(.25)
@@ -808,7 +535,7 @@ class DalyBmsService:
         temporary.replace(self._mos_encoding_path)
 
     def _wait_connection_pause(self):
-        with self._connection_timing_lock:delay=max(0.0,1.0-(time.monotonic()-self._last_connection_attempt))
+        with self._connection_timing_lock:delay=max(0.0,CONNECTION_PAUSE-(time.monotonic()-self._last_connection_attempt))
         if delay:time.sleep(delay)
 
     def _record_connection_attempt(self):
@@ -903,7 +630,7 @@ class DalyBmsService:
             self._set_control_status(phase="updating",message=f"Updating {name} (1/1)",current=1)
             return self._run_control(name,action,enabled)
         finally:
-            if owns_radio:bluetooth_coordinator.release("bms_control")
+            if owns_radio:bluetooth_coordinator.release("bms_control",owns_radio)
             self._set_control_status(busy=False,phase="idle",message="",current=0,total=0)
 
     def control_all(self,action):
@@ -937,5 +664,5 @@ class DalyBmsService:
                     raise RuntimeError(f"Set all stopped at Battery {index}/{total} ({name}): {str(exc).strip() or type(exc).__name__}. Completed before failure: {done}. Not changed: {untouched}") from exc
             return {"changed":True,"action":action,"results":results,"refresh_complete":True,"targets":targets}
         finally:
-            if owns_radio:bluetooth_coordinator.release("bms_control")
+            if owns_radio:bluetooth_coordinator.release("bms_control",owns_radio)
             self._set_control_status(busy=False,phase="idle",message="",current=0,total=0)
