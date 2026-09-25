@@ -10,6 +10,14 @@ Unless an entry says otherwise, every release also bumps the application version
 
 ---
 
+## 1.12 — History charts
+
+### 1.12.0
+- **History → Storage → Remaining:** the left axis is fixed at **0–1000 Ah** and a right axis shows **0–100 %**, where 100 % is the 960 Ah bank capacity (a dashed line marks 960 Ah, just below the top of the chart).
+- **History → Sources:** the *Charge current (A)* chart is removed because it repeated *Generated power*. That chart is now **Generated power (W / A)**: the amps are on a right-hand axis. The two units are linked through the average bus voltage of the period (total watts ÷ total amps, shown in the subtitle, typically about 13.5 V), and the dashed average line shows both units.
+- **History → Loads:** same change: *DC load current (A)* is removed and **DC consumption (W / A)** has the amps on the right axis.
+- The donut charts stay directly under the remaining chart of their tab (*Source contribution*, *Total per Consumer*).
+
 ## 1.11 — History totals
 
 ### 1.11.0
