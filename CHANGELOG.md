@@ -27,16 +27,63 @@ Unless an entry says otherwise, every release also bumps the application version
 - **History → Loads:** same change: *DC load current (A)* is removed and **DC consumption (W / A)** has the amps on the right axis.
 - The donut charts stay directly under the remaining chart of their tab (*Source contribution*, *Total per Consumer*).
 
-## 1.13 — Float protection on cell voltage, fresh data only, Bluetooth robustness
-
-Imported from the live folder (commit `3de09f3`): these versions (1.12.x–1.13.0, 21–23 Sep 2026) were made directly in
-`C:\Temp\mastervoltproject` and had no release notes. The entries below are reconstructed from the code and its comments.
+## 1.13 — Float protection dual trigger
 
 ### 1.13.0
-- **Float protection also watches individual cells.** Float now starts when *either* the House SOC reaches its threshold *or* the highest single cell of any battery reaches the new **cell-voltage Float trigger** (default 3500 mV, allowed 3300–3650 mV), because the pack-average SOC can lag far behind one divergent cell. Bulk resumes only when both are back in range (**cell-voltage Bulk level**, default 3420 mV, allowed 3200–3650 mV, at least 30 mV below the trigger). The cell spread is informational only and never forces Float. The two levels are new fields on the Settings page, validated in the browser and on the server.
-- **Never act on old battery data.** `house_soc.py` computes the House SOC and the cell-voltage figures only from DALY readings that are fresh (younger than the larger of 120 s and 4 × the BMS refresh interval). If the SOC is missing or old while Float is latched, Float is *held* and Bulk is never resumed on old data; an unknown value never starts Float by itself. `/api/energy` reports the SOC source (`daly_bms_average`, `daly_bms_stale`, `daly_bms_unavailable`), the number of fresh batteries, the reading age, and the highest cell and worst spread with their battery; `high_soc_float_policy` also reports the trigger that started Float.
-- **Bluetooth event log.** `ble_events.py` records every connect, read, timeout and watchdog action to a rotating `logs/bluetooth.log` and an in-memory buffer, with per-device counters, timings and the signal strength (RSSI) seen in scans; available at `GET /api/bluetooth-events`.
-- **More robust DALY BMS and balancer links.** Hard deadlines on every connect, notification set-up, read and disconnect; exponential back-off for unreachable devices; unanswered status commands are repeated once and only *complete* statuses are published; a watchdog rebuilds a stalled balancer worker and a supervisor restarts a crashed one; cached GATT services on Windows. The Bluetooth coordinator got ticketed priorities with maximum hold times and an async lease. The Balance page marks data that is no longer updated.
+Analysis of 10 days of stored BMS history found 44 cell-voltage/cell-imbalance alarm episodes, several ending in the
+BMS itself cutting the charge MOSFET off - Float protection did not stop charging in time to prevent them. Root cause:
+Float watched only the *average* House SOC across the three parallel batteries, and one battery can reach a high
+individual SOC (its own coulomb counter can already read 100%) - with one of its cells already inside DALY's own
+high-voltage alarm band - while the average is still far below the 95% Float threshold (as low as 58-91% in the
+recorded episodes). No manufacturer alarm thresholds are read or changed; the fix works entirely from the app's own,
+independently-chosen cell-voltage figure.
+- **Float now has two independent triggers** (`house_soc.py`, `float_decision()`): the existing SOC average (default
+  95%, unchanged), **or** the highest single cell voltage across all three batteries reaching a new threshold
+  (default 3500 mV). Either is enough to force Float; a normal full-charge cell sits around 3360-3390 mV, and DALY's
+  own "Cell voltage high" alarm was observed starting around 3550-3600 mV, so 3500 mV acts with real margin on both
+  sides.
+- **Resume to Bulk needs both signals clear**: the SOC at or below *Switch to Bulk when SOC* (default 90%, unchanged)
+  **and** every cell at or below a new resume level (default 3420 mV). If either reading is unknown (stale Bluetooth
+  link) while Float is latched, it holds rather than resuming blind - this generalises the 1.12.0 freshness-hold to
+  the cell-voltage signal.
+- **Two new settings, adjustable on the Settings page** like the existing SOC pair: *Also switch to Float when a cell
+  reaches* (`float_cell_trigger_mv`, 3300-3650 mV) and *Switch to Bulk once every cell is at or below*
+  (`float_cell_resume_mv`, 3200-3650 mV, must be at least 30 mV below the trigger).
+- `high_soc_float_policy` (and `/api/energy`'s `storage.house`) gains `max_cell_mv`, `max_cell_battery`,
+  `max_spread_mv`, `max_spread_battery`, `cell_trigger_mv`, `cell_resume_mv` and `trigger` (`"soc"`, `"cell_voltage"`,
+  `"soc+cell_voltage"` or `"held"`, saying which condition forced Float). The Dashboard's Float pop-up now names the
+  actual reason instead of always citing the SOC threshold.
+- The per-battery **cell spread** (worst cell-to-cell difference within a battery) is now also reported for the same
+  reason, but is deliberately **informational only** - it is not wired into the trigger, so a brief, harmless
+  imbalance mid-charge cannot stall normal Bulk charging.
+- Control write paths, the verified Float/Bulk command sequences, the 20 s per-source retry and the 3 s check
+  interval are unchanged. New tests: `float_freshness_self_test.py` gained a cell-voltage part reproducing the
+  reported failure mode end-to-end (a low SOC average with a hot cell still forces Float; resume is blocked until
+  the cell cools; a stale cell reading holds rather than resumes blind) plus settings-validation checks.
+
+## 1.12 — Bluetooth reliability
+
+### 1.12.2
+- **Signal strength.** Every scan now records the advertisement signal strength (RSSI, dBm) of each DALY balancer and battery it sees, also of balancers that were visible but not being looked for. `GET /api/bluetooth-events` reports it per device as `signal` (last, average, recent average, min, max), and the balancer scan line in `logs/bluetooth.log` shows it (`found DL-BAL3 (-71 dBm); also visible DL-BAL2 (-58 dBm)`). Purpose: tell a weak link (a balancer that is visible but cannot be connected) from a device that is held by another Bluetooth central or has stopped advertising. Passive: it only reads what the existing scans already return. Nothing else changed.
+
+### 1.12.1
+- **Bluetooth timings.** `GET /api/bluetooth-events` now also reports, per device, how long each step took: `connect`, `notify` (start of notifications), `read` (a complete status), `disconnect`, `radio_wait` (waiting for the radio) and `radio_hold` (how long the radio was occupied), plus the balancer `scan`. Each has the count, successful/failed, average, median, p95 and maxima (most recent 200 samples). A successful connect that takes 8 s or more is logged as `slow_connect`, and failed connects/reads now say how long they held the radio (`after 18.0 s on the radio`). This is to choose the connect time-outs from measurements. Nothing in the Bluetooth behaviour changed.
+- No functional changes to the controls, Float protection or the mappings.
+
+### 1.12.0
+Based on an analysis of the stored history: the balancers were silent for 29% of the uptime (every gap ended at a server restart) and Battery 2's link was lost 4.3% of the time against 0.3% for Batteries 1 and 3. The MasterBus side and the MOSFET/SOC **control write paths are unchanged**; only the read/monitoring path and the shared radio arbitration were changed.
+- **Balancers (`daly_balancer_service.py`, rewritten, same API):**
+  - Every Windows BLE call now has a hard time-out (connect, notifications, GATT writes, disconnect), so a hung call can no longer freeze the single balancer loop.
+  - A crash-proof supervisor rebuilds the worker if anything raises; a **stall watchdog** forces a rescan after 10 minutes without a successful read, then rebuilds the worker, and finally reports the balancers as *wedged* (visible in `/api/balancers`).
+  - **Exponential back-off per balancer** (retry × 2ⁿ, at most 5 minutes): a failing balancer no longer slows the healthy ones, and a healthy balancer keeps its own refresh interval.
+  - A status is **published only when all nine commands were answered**; unanswered commands are asked once more within the same connection. No more half-read balancer rows in the history.
+  - Static device information is read once instead of every cycle; known balancers are not scanned for again.
+  - The snapshot reports `last_success_age_seconds`, `stale`, `next_attempt_in_seconds`, `wedged`, `worker_restarts`; the Balance page shows *Data N min old* for stale data.
+- **Bluetooth coordinator (`bluetooth_coordinator.py`, rewritten, same priority order):** lease tokens (a late release from a timed-out caller can no longer free someone else's turn), a maximum hold time per kind that takes the radio back from a hung holder, FIFO order within a priority, and a **degraded mode**: if one BMS stays unreachable for 2 minutes the balancers are allowed again instead of waiting forever.
+- **BMS monitoring (`daly_bms_service.py`):** hard deadlines on connect/notify/disconnect, a client that connected but never finished starting notifications is now closed (no leaked handle), a lost status request is retried once before the link is rebuilt, an incomplete status is never published (three in a row rebuild the link), and an unreachable battery is retried with exponential back-off (at most 60 s). Removed the unused legacy service class.
+- **Bluetooth event log:** new `ble_events.py` writes `logs/bluetooth.log` (rotating, 1 MB × 3) and keeps per-device counters; `GET /api/bluetooth-events` returns them, so the next reliability question can be answered from data.
+- **Float protection freshness (`house_soc.py`):** the House SOC now only averages DALY readings younger than max(120 s, 4 refresh intervals). If none is fresh the SOC is unknown. While Float is latched an unknown SOC **holds** Float (sources that start charging are still put in Float) and **never resumes Bulk on old data**; an unknown SOC never starts Float protection by itself. Before, a battery whose link was down kept contributing its last SOC indefinitely. `high_soc_float_policy` gains `soc_held`, `soc_stale`, `soc_fresh_batteries`, `soc_age_seconds`, `last_known_soc`; `soc_source` can be `stale_hold`. The Float/Bulk thresholds, the 20 s retry and the verified Float/Bulk command sequences are unchanged. `/api/energy` reports `soc_fresh_batteries`, `soc_age_seconds` and `soc_source: daly_bms_stale` when only old readings exist (the Dashboard then shows no SOC instead of an old one).
+- New hardware-free tests with a simulated `bleak` (`ble_fakes.py`): `daly_balancer_self_test.py`, `daly_bms_worker_self_test.py`, `bluetooth_coordinator_self_test.py`, `float_freshness_self_test.py`. **Not yet verified on the boat's hardware.** Suggested settings after deploying: balancer refresh interval 300 s and retry at least 60 s.
 
 ## 1.11 — History totals
 

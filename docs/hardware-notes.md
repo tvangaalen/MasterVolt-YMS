@@ -107,27 +107,45 @@ subtracted from *Other DC Loads* so nothing is counted twice.
 `Pin = Pout / 0.85`, `Iin = Pin / Vin` (field 39). 85% is a deliberately conservative efficiency for its very low
 operating point.
 
-## High-SOC Float protection
+## Float protection (SOC and cell-voltage dual trigger)
 
-Runs server-side every 3 s, independent of any browser. Float starts when **either** the DALY-average House SOC reaches
-*Switch to Float when SOC* (default 95%) **or** the highest single cell of any battery reaches the *cell-voltage Float
-trigger* (default 3500 mV): a divergent cell can reach the danger zone long before the pack average does. Active Charger
-House, Solar and Alternator charging is then forced to Float and verified (20 s retry cooldown). It switches back to Bulk
-only when **both** the SOC has fallen to *Switch to Bulk when SOC* (at least 5 points lower, default 90%) **and** every
-cell is at or below the *cell-voltage Bulk level* (default 3420 mV, at least 30 mV below the trigger). Inactive sources
-are never switched on.
+Runs server-side every 3 s, independent of any browser. Active Charger House, Solar and Alternator charging is forced
+to Float and verified (20 s retry cooldown) as soon as **either** of two triggers fires:
 
-SOC and cell voltages count only when the DALY readings are fresh (younger than max(120 s, 4 x the BMS refresh
-interval), see `house_soc.py`). Old or missing data never starts Float by itself, and while Float is latched it *holds*
-Float instead of resuming Bulk blind. The cell spread is informational only. Status, including the reason Float is
-active (`trigger`: `soc`, `cell_voltage`, `soc+cell_voltage`, `held`), is in `/api/energy` as `high_soc_float_policy`.
-This is safety-critical code: change `float_decision()` only on explicit request and with tests.
+- the DALY-average House SOC reaches *Switch to Float when SOC* (default 95%), or
+- the highest single cell voltage of any of the three batteries reaches *Also switch to Float when a cell reaches*
+  (default 3500 mV, settings `float_cell_trigger_mv`).
+
+The cell-voltage trigger was added in 1.13.0 after 10 days of stored history showed 44 cell-voltage/imbalance alarm
+episodes (several ending in the BMS itself cutting the charge MOSFET) while the SOC average was as low as 58-91% -
+three parallel batteries do not necessarily reach a high SOC together, and one battery's own coulomb-counted SOC can
+already read 100%, with one of its cells already inside DALY's own high-voltage alarm band (observed starting around
+3550-3600 mV; a normal full-charge cell sits around 3360-3390 mV), while the pack average is nowhere near 95%. No DALY
+alarm-threshold registers are read or changed; 3500 mV is the app's own, independently-chosen figure.
+
+It switches back to Bulk only once **both** signals are back in range: SOC at or below *Switch to Bulk when SOC* (at
+least 5 points lower, default 90%) **and** every cell at or below *Switch to Bulk once every cell is at or below*
+(default 3420 mV, `float_cell_resume_mv`, at least 30 mV below the trigger). Inactive sources are never switched on.
+Status is in `/api/energy` as `high_soc_float_policy`, which also names which condition is active via `trigger`
+(`"soc"`, `"cell_voltage"`, `"soc+cell_voltage"` or `"held"`).
+
+Only *fresh* readings count (`house_soc.py`): each battery's reading must be younger than max(120 s, 4 x the BMS
+refresh interval). The SOC is the average of the fresh batteries, and the cell-voltage figures come from the same
+fresh set (`cell_voltage_stats()`); if none is fresh, both are unknown. While Float is latched and either signal is
+unknown the policy *holds*: sources that (re)start charging are still forced to Float, and Bulk is never resumed on
+old data (`soc_source` = `stale_hold`, plus `soc_stale`, `soc_fresh_batteries`, `soc_age_seconds`, `last_known_soc`,
+`max_cell_mv`, `max_cell_battery`). Neither an unknown SOC nor an unknown cell voltage ever starts Float protection by
+itself. The **cell spread** (worst cell-to-cell difference within a battery, `max_spread_mv`/`max_spread_battery`) is
+reported for the same reason but is deliberately informational only - not wired into the trigger, so a brief,
+harmless imbalance mid-charge cannot stall normal Bulk charging. There is deliberately no MasterShunt fallback (see
+above).
 
 ## DALY BMS / balancer notes
 
 - **BMS** (`BATTERY 1`–`3`): legacy `0xA5` protocol. Writes use source byte `0x80`; SOC `0x21` (value x10), Charge MOS `0xDA`, Discharge MOS `0xD9`. Firmware variants differ on whether payload `1` means ON, so the encoding is learned per battery and per MOS by read-back and stored in `data/bms_mos_encoding.json`. Protection-threshold registers are deliberately not accessed. Alarm bits come from `0x98`; balancing bit 0 = cell 1.
 - **Balancers** (`DL-BAL1`–`3`): monitored directly over their own FFF1 characteristic, read-only. Balance current is the current byte of response `0x93` at 0.01 A/LSB; the `0x90` pack current is unrelated.
 - **Bluetooth coordination:** one Windows machine cannot hold six reliable GATT sessions, so a single priority queue arbitrates the radio: user controls > manual BMS refresh/reconnect > automatic reconnect > automatic BMS reads > balancer traffic. BMS links are persistent (one thread + event loop each); balancers connect, read and disconnect one at a time once all BMS links are stable.
+- **Bluetooth robustness (1.12):** every Windows BLE call has a hard deadline (`asyncio.wait_for`), a half-open client is always disconnected, and coordinator leases carry a token and a maximum hold time so a hung call can never keep the radio. A balancer that keeps failing backs off exponentially (retry x 2^n, at most 5 min) without slowing the others; a stall watchdog forces a rescan, then rebuilds the balancer worker, and flags it as *wedged*. A balancer or BMS status is published only when all nine DALY commands were answered, and unanswered commands are asked once more. With one BMS unreachable for 2 minutes the balancers are allowed again (*degraded* mode). Events, per-device counters and timings: `logs/bluetooth.log` and `GET /api/bluetooth-events` (`counters.<device>.timings.<connect|notify|read|disconnect|radio_wait|radio_hold|scan>` with count, average, median, p95 and maxima of successful and failed attempts; use these, not guesses, to choose time-outs). `counters.<device>.signal` holds the advertisement signal strength (RSSI, dBm: last, average, recent average, min, max) of every DALY device seen in a scan; the balancer scan log line also lists the signal of each device and of balancers that were visible but not looked for. Roughly, -50 to -70 dBm is a good link, below about -85 dBm is marginal. Background: in the analysed history the balancers were silent 29% of the time, every gap ending at a server restart; Battery 2's link was lost 4.3% of the time against 0.3% for Battery 1 and 3.
 - **Voltage-derived SOC** (*SOC - Charging* / *SOC - Discharging*) interpolates the average cell voltage against LiFePO4 reference curves. These are comparison indicators; `Set SOC - charge/discharge` writes the same values to the BMS.
 
 ## Utility scripts
@@ -138,6 +156,9 @@ All are run from the project folder with `py <script>`. Scripts marked **writes*
 |---|---|
 | `self_check.py` | Structural regression check of `MasterBusService` / `ControlDiscovery` (no hardware) |
 | `bms_control_self_test.py`, `bluetooth_connection_self_test.py` | Non-hardware checks of DALY MOS control and failure-isolated workers |
+| `bluetooth_coordinator_self_test.py`, `daly_bms_worker_self_test.py`, `daly_balancer_self_test.py` (with `ble_fakes.py`, a simulated `bleak`) | Non-hardware checks of the coordinator, the BMS monitoring workers and the balancer service: hung connects, lost requests, incomplete statuses, back-off, watchdog, degraded mode |
+| `ble_events_self_test.py` | Non-hardware check of the Bluetooth event log and its timing statistics |
+| `float_freshness_self_test.py` | Non-hardware check of the House-SOC age check and the real Float-protection loop with stubbed hardware access |
 | `battery_health.py` | Read-only battery health report from the stored history (verdict per battery, cell resistance, current sharing, alarms, balancers); `--split` compares before/after a change; also available in the app under History → Reports. Self-tests: `battery_health_self_test.py`, `report_service_self_test.py` |
 | `show_control_maps.py` | Print the active control mappings (check `engine_ecu` before starting) |
 | `field_audit.py` | Print every field number the app currently uses, including persisted `device_maps.json` |
