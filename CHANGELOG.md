@@ -10,6 +10,14 @@ Unless an entry says otherwise, every release also bumps the application version
 
 ---
 
+## 1.15 — History time axis and zoom
+
+### 1.15.0
+- **History → Zoom.** A **Zoom** button next to *Custom* opens two sliders (*Zoom from* / *Zoom to*, same style) that narrow the selected period: for example inside a 24 h selection, move the start forward and the end backward. All charts and donut charts follow the zoomed period, the header shows *“12 hours · zoomed in from 24”* and the Zoom button is highlighted while a zoom is active. **Reset zoom** restores the full selection; choosing another preset or a Custom range also clears it. The Zoom and Custom panels are never open at the same time. Minimum zoom is 1 minute.
+- **Whole time units on every chart's horizontal axis.** Labels and tick marks now sit on whole hours (09:00, 10:00 …), never on 09:35: a longer tick on every whole hour and a shorter one on every half hour. Longer periods switch to whole days (long tick) with half days (12:00, short tick) and weeks for very long periods; far zoomed-in views use 10 and 5 minutes. Midnight is labelled with the date. Labels are thinned to fit the width (for example every 2 or 4 hours on a phone). One shared routine (`drawTimeAxis`) draws the axis of all seven chart types.
+- **Power charts start at 0.** *Generated power*, *DC consumption* and *AC power* no longer show a negative range below zero (the right-hand amps axis starts at 0 A too). Charts with real negative values (charge/discharge current) still pad below zero.
+- **BMS page:** tapping a battery's **column title** (Battery 1–3) in the matrix refreshes just that battery, like the tiles at the top and like the Balance page's column titles.
+
 ## 1.14 — History charts
 
 ### 1.14.0
