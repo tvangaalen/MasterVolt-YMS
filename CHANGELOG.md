@@ -10,6 +10,11 @@ Unless an entry says otherwise, every release also bumps the application version
 
 ---
 
+## 1.16 — History cache keeps itself current
+
+### 1.16.0
+- **Fix: the History page could show data that was hours or days old.** The server-side chart cache that the History page reads was built once at startup and otherwise only advanced when a browser pressed **Update**; fresh readings kept landing in the database the whole time, but a server left running for days without anyone opening History and pressing Update (or a History tab left open) kept showing the snapshot from the last restart or click. `_history_loop` now also refreshes the chart cache roughly once a minute; the refresh was already incremental (only the rows added since the last one), so this adds no real cost. Added an index on `measurements(source, id)` so that incremental sync stays cheap as the database grows. The **Update** button still works the same way, for an on-demand refresh.
+
 ## 1.15 — History time axis and zoom
 
 ### 1.15.0

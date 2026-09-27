@@ -27,9 +27,17 @@ battery_reports=BatteryHealthReports(BASE)
 history_stop=threading.Event()
 
 def _history_loop():
-    """Log dashboard every 10 seconds and each new Bluetooth measurement once."""
-    last_bms={};last_balancers={}
+    """Log dashboard every 10 seconds and each new Bluetooth measurement once.
+
+    Also keeps the server-side chart cache (History page) in sync, roughly once a minute: it used to be built
+    once at startup and otherwise only advanced when a browser pressed "Update", so a History tab left open (or
+    the server left running for days) could show data that was hours or days old even though fresh readings kept
+    landing in the database (changelog 1.16.0). The sync itself is cheap and incremental (only rows added since
+    the last one), so running it here does not add a per-request cost.
+    """
+    last_bms={};last_balancers={};loop_count=0
     while not history_stop.wait(10):
+        loop_count+=1
         try:
             energy_data=service.energy();soc=available_house_bms_soc()
             if "house" in energy_data.get("storage",{}):energy_data["storage"]["house"]["soc"]=soc
@@ -48,6 +56,9 @@ def _history_loop():
                 if stamp and stamp!=last_balancers.get(name):
                     history_service.record("balancer",{"state":value.get("state"),"status":value.get("status",{}),"error":value.get("error")},name,stamp);last_balancers[name]=stamp
         except Exception:pass
+        if loop_count%6==0:
+            try:history_service.refresh_chart_cache()
+            except Exception:pass
 
 # Float protection and Dashboard use the same authoritative DALY House SOC.
 # Protection waits until the first valid DALY reading instead of acting on a
@@ -136,7 +147,7 @@ async def lifespan(app):
     try: await asyncio.to_thread(balancer_service.stop)
     except: pass
 
-app=FastAPI(title="Mastervolt Energy",version="1.15.0",lifespan=lifespan)
+app=FastAPI(title="Mastervolt Energy",version="1.16.0",lifespan=lifespan)
 app.add_middleware(GZipMiddleware,minimum_size=1000)
 app.mount("/static",StaticFiles(directory=STATIC),name="static")
 

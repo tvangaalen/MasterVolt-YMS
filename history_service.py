@@ -20,6 +20,7 @@ class HistoryService:
             db.execute("PRAGMA journal_mode=WAL")
             db.execute("CREATE TABLE IF NOT EXISTS measurements (id INTEGER PRIMARY KEY, captured_at TEXT NOT NULL, source TEXT NOT NULL, device TEXT, payload TEXT NOT NULL)")
             db.execute("CREATE INDEX IF NOT EXISTS idx_measurements_time ON measurements(captured_at DESC)")
+            db.execute("CREATE INDEX IF NOT EXISTS idx_measurements_source_id ON measurements(source, id)")
 
     @contextmanager
     def _connect(self):
