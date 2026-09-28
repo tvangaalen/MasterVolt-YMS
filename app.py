@@ -147,7 +147,7 @@ async def lifespan(app):
     try: await asyncio.to_thread(balancer_service.stop)
     except: pass
 
-app=FastAPI(title="Mastervolt Energy",version="1.16.0",lifespan=lifespan)
+app=FastAPI(title="Mastervolt Energy",version="1.17.0",lifespan=lifespan)
 app.add_middleware(GZipMiddleware,minimum_size=1000)
 app.mount("/static",StaticFiles(directory=STATIC),name="static")
 
@@ -157,11 +157,8 @@ class ModeReq(BaseModel): mode:str
 class SettingsReq(BaseModel):
     default_ac_limit:int=Field(ge=3,le=15)
     float_protection_enabled:bool
-    house_battery_soc:float=Field(ge=50,le=100)
-    bulk_resume_soc:float=Field(ge=0,le=95)
     float_cell_trigger_mv:float=Field(ge=3300,le=3650)
     float_cell_resume_mv:float=Field(ge=3200,le=3650)
-    warning_popup_seconds:int=Field(ge=1,le=60)
     bms_refresh_interval:int=Field(ge=5,le=300)
     bms_popup_seconds:int=Field(ge=1,le=60)
     bms_connection_retry_seconds:int=Field(ge=1,le=300)
@@ -301,8 +298,15 @@ async def bms_set_soc_100(battery_id:int):
     except ValueError as e:raise HTTPException(400,detail=str(e))
     except Exception as e:raise HTTPException(503,detail=_bms_error(e))
 
+class SocValueReq(BaseModel): percent:float=Field(ge=0,le=100)
+
 @app.post("/api/bms/{battery_id}/set-soc-{mode}")
-async def bms_set_soc_curve(battery_id:int,mode:str):
+async def bms_set_soc_curve(battery_id:int,mode:str,req:SocValueReq|None=None):
+    if mode=="value":
+        if req is None:raise HTTPException(400,detail="Missing percent")
+        try:return await asyncio.to_thread(bms_service.control,_bms_name(battery_id),"set_soc_value",req.percent)
+        except ValueError as e:raise HTTPException(400,detail=str(e))
+        except Exception as e:raise HTTPException(503,detail=_bms_error(e))
     action={"charge":"set_soc_charge","discharge":"set_soc_discharge"}.get(mode)
     if not action:raise HTTPException(404,detail="Unknown SOC curve")
     try:return await asyncio.to_thread(bms_service.control,_bms_name(battery_id),action)
@@ -310,7 +314,12 @@ async def bms_set_soc_curve(battery_id:int,mode:str):
     except Exception as e:raise HTTPException(503,detail=_bms_error(e))
 
 @app.post("/api/bms/set-all-soc/{mode}")
-async def bms_set_all_soc(mode:str):
+async def bms_set_all_soc(mode:str,req:SocValueReq|None=None):
+    if mode=="value":
+        if req is None:raise HTTPException(400,detail="Missing percent")
+        try:return await asyncio.to_thread(bms_service.control_all,"set_soc_value",req.percent)
+        except ValueError as e:raise HTTPException(400,detail=str(e))
+        except Exception as e:raise HTTPException(503,detail=_bms_error(e))
     action={"100":"set_soc_100","charge":"set_soc_charge","discharge":"set_soc_discharge"}.get(mode)
     if not action:raise HTTPException(404,detail="Unknown SOC mode")
     try:return await asyncio.to_thread(bms_service.control_all,action)

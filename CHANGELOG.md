@@ -10,6 +10,17 @@ Unless an entry says otherwise, every release also bumps the application version
 
 ---
 
+## 1.17 — Float protection is cell-voltage only, manual SOC entry, gauge meters
+
+### 1.17.0
+- **Float protection no longer has a SOC trigger.** It used to start on *either* the average House SOC reaching its threshold *or* any single cell reaching the cell-voltage trigger; the SOC side is removed, so Float now starts purely on the highest single cell voltage (`house_soc.float_decision`, `masterbus_service.enforce_high_soc_float`). Bulk resume also drops its SOC condition: it resumes once every cell is back at or below the resume level. The pack-average House SOC is still shown on the Control panel and reported in `/api/energy` for information, but no longer starts, holds or resumes Float. The *Switch to Float when SOC* and *Switch to Bulk when SOC* settings are removed; *Also switch to Float when a cell reaches* is renamed **Switch to Float when any cell reaches**. An older `user_settings.json` with the removed fields still loads.
+- **Set SOC pop-ups (BMS page, per battery and "Set all SOC") can take a manual percentage**, next to the existing Charge-curve, Discharge-curve and 100% choices. New `POST /api/bms/{battery_id}/set-soc-value` and `POST /api/bms/set-all-soc/value` routes (body `{"percent": N}`, 0-100).
+- **The Float protection warning is now a blocking pop-up**: it stays open until the user clicks OK instead of closing itself after a few seconds. The *Show warning pop-up duration* setting is removed (the BMS pop-up duration, used elsewhere, is unaffected).
+- **Control panel** (renamed from "Dashboard", including the bottom-tab label): the Storage tiles' circular SOC indicators are replaced with the same arc-gauge meter (red/amber/green zones, needle, percentage) used on the BMS page, sharing one `gaugeDial()` routine with the BMS page's own gauge.
+- **BMS page:** the System section's *Balancing* row is removed (balancing state is already visible on the Balance page).
+- **Control panel, Sources tile:** the *AC limit (A)* label now sits below the input instead of above it.
+- Mappings, control sequences and hardware-verified fields are otherwise unchanged.
+
 ## 1.16 — History cache keeps itself current
 
 ### 1.16.0

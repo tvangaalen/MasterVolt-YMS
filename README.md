@@ -1,6 +1,6 @@
 # MasterVolt YMS
 
-**Mastervolt Energy v1.16.0** — a private web app (installable iPhone PWA) that monitors and controls a boat's
+**Mastervolt Energy v1.17.0** — a private web app (installable iPhone PWA) that monitors and controls a boat's
 Mastervolt electrical system and its DALY battery management, from a Windows PC on the boat's LAN.
 
 - **MasterBus** over the Mastervolt USB Link: CombiMaster (shore power, inverter, charger), Solar ChargeMaster,
@@ -14,8 +14,8 @@ Release history: [CHANGELOG.md](CHANGELOG.md). Protocol findings and field maps:
 
 | Page | What it does |
 |---|---|
-| **Dashboard** | Sources, Storage and Loads tiles with live V/A/W; ON/OFF controls; Motor / Anchor / Sail / Marina modes; shore-power AC limit; `INV` and `SUP`; Engine ECU power with a safety confirmation |
-| **BMS** | Side-by-side House battery matrix: SOC, voltages (3 decimals), cell voltages, temperatures, alarms, MOS state, voltage-derived SOC; Charge/Discharge controls and Set SOC (per battery and all); tap a battery's column title or tile to refresh just that battery |
+| **Control panel** | Sources, Storage and Loads tiles with live V/A/W and the same arc-gauge SOC meter as the BMS page; ON/OFF controls; Motor / Anchor / Sail / Marina modes; shore-power AC limit; `INV` and `SUP`; Engine ECU power with a safety confirmation |
+| **BMS** | Side-by-side House battery matrix: SOC, voltages (3 decimals), cell voltages, temperatures, alarms, MOS state, voltage-derived SOC; Charge/Discharge controls and Set SOC (per battery and all) — a curve-based value, 100%, or a manual percentage; tap a battery's column title or tile to refresh just that battery |
 | **Balance** | Same layout for the three balancers (tap a balancer's column title to refresh only that balancer), plus collapsed raw Bluetooth diagnostics |
 | **History** | Charts for Sources, Storage, Loads and Alarms (stacked areas with a smooth total line), served from a server-side cache, with touch-friendly time-range buttons (4 h … All), a Custom From/To range and a Zoom that narrows the selected period further, whole-hour/whole-day time axes, and a donut chart per tab with the totals over the selected period (source contribution, battery contribution, total per consumer, alarms per battery); a **Reports** tab with the battery health report (asks for the number of days, runs it on the server, shows the result) |
 | **Settings** | Default AC limit, Float protection thresholds, refresh/retry intervals, pop-up durations, history retention |
@@ -66,7 +66,7 @@ py show_control_maps.py
 - Only hardware-verified MasterBus fields are used; nothing is guessed at run time.
 - Engine ECU OFF needs an explicit confirmation whose default is *Keep ECU ON*, and no operating mode ever switches it off.
 - Controls write, then read back and verify; DALY writes are queued through one Bluetooth priority queue, with a pre-change backup written to `backups/`.
-- **Float protection** runs on the server every 3 s and forces active charging sources to Float on **either** of two triggers (default: average House SOC >= 95%, **or** any single cell reaching 3500 mV - both settable). The cell-voltage trigger exists because three parallel batteries do not necessarily reach a high SOC together: one battery's own SOC estimate can already read 100%, with one of its cells already in DALY's own high-voltage alarm band, while the pack average is still far below the SOC threshold (see CHANGELOG 1.13.0). Bulk resumes only once the SOC and every cell are back within range; it only acts on *fresh* DALY data (younger than 4 refresh intervals, at least 2 minutes) and holds Float rather than resuming blind if the readings go stale.
+- **Float protection** runs on the server every 3 s and forces active charging sources to Float once any single cell reaches the configurable trigger (default 3500 mV). Three parallel batteries do not necessarily reach a high SOC together: one battery's own SOC estimate can already read 100%, with one of its cells already in DALY's own high-voltage alarm band, while the pack average is still far below where the SOC trigger used to sit (see CHANGELOG 1.13.0) - the SOC trigger itself was removed in 1.17.0, so cell voltage is now the only trigger. Bulk resumes only once every cell is back at or below the resume level; it only acts on *fresh* DALY data (younger than 4 refresh intervals, at least 2 minutes) and holds Float rather than resuming blind if the readings go stale. The pack-average House SOC is still shown on the Control panel for information, but no longer affects Float protection.
 - The server listens only on a private RFC1918 address (or localhost). Nothing is published to the internet.
 
 ## Project layout
@@ -80,7 +80,7 @@ daly_bms_service.py        DALY BMS Bluetooth (persistent per-battery workers, M
 daly_balancer_service.py   DALY balancer Bluetooth (read-only; crash-proof worker with watchdog and back-off)
 bluetooth_coordinator.py   Process-wide Bluetooth priority queue (lease tokens, max-hold, degraded mode)
 ble_events.py              Bluetooth event log, per-device counters, connect/read timings and signal strength (logs/bluetooth.log, /api/bluetooth-events)
-house_soc.py               House SOC average and per-cell voltage/spread from the DALY readings, with an age check (Float protection's dual trigger)
+house_soc.py               House SOC average (informational) and per-cell voltage/spread from the DALY readings, with an age check (Float protection's cell-voltage trigger)
 history_service.py         SQLite history and server-side chart cache
 static/                    index.html (SPA), PWA manifest + service worker, icons, cached product photos
 control_maps.json, device_maps.json, mastershunt_config_maps.json   Verified device/control mappings

@@ -100,25 +100,24 @@ def cell_voltage_stats(batteries, now, max_age):
     }
 
 
-def float_decision(enabled, latched, soc, threshold, bulk_threshold, max_cell_mv=None, cell_trigger_mv=None, cell_resume_mv=None):
-    """(active, resume, held, trigger): what Float protection does with the current SOC and highest cell voltage.
+def float_decision(enabled, latched, max_cell_mv, cell_trigger_mv, cell_resume_mv):
+    """(active, resume, held, trigger): what Float protection does with the highest cell voltage.
 
-    Float starts when EITHER the average SOC reaches `threshold` OR the highest single cell (of any battery)
-    reaches `cell_trigger_mv` - a single divergent cell can enter the danger zone long before the pack average
-    does. Bulk resumes only once BOTH are back within their safe range; if either is unknown (stale link) while
-    latched, Float is held rather than resumed blind, and an unknown value never starts Float by itself.
-    `trigger` explains why Float is active: "soc", "cell_voltage", "soc+cell_voltage", "held" or None.
+    Float starts once the highest single cell (of any battery) reaches `cell_trigger_mv` - three parallel
+    batteries do not necessarily reach a high state of charge together, so a single divergent cell can enter
+    the danger zone long before the pack-average SOC would (see CHANGELOG 1.13.0). Bulk resumes only once every
+    cell is back at or below `cell_resume_mv`; if the cell reading is unknown (stale Bluetooth link) while
+    latched, Float is held rather than resumed blind, and an unknown reading never starts Float by itself.
+    Float protection no longer has a SOC trigger at all (removed in CHANGELOG 1.17.0): the pack-average SOC is
+    still shown to the user for information, but never starts, holds or resumes Float protection.
+    `trigger` explains why Float is active: "cell_voltage", "held" or None.
     """
-    soc_hot = soc is not None and soc >= threshold
     cell_hot = max_cell_mv is not None and cell_trigger_mv is not None and max_cell_mv >= cell_trigger_mv
-    resume = bool(
-        enabled and latched and soc is not None and soc <= bulk_threshold
-        and (cell_trigger_mv is None or (max_cell_mv is not None and max_cell_mv <= cell_resume_mv))
-    )
-    unknown = soc is None or (cell_trigger_mv is not None and max_cell_mv is None)
+    unknown = max_cell_mv is None
+    resume = bool(enabled and latched and not unknown and max_cell_mv <= cell_resume_mv)
     held = bool(enabled and latched and unknown and not resume)
-    active = bool(enabled and not resume and (soc_hot or cell_hot or held))
+    active = bool(enabled and not resume and (cell_hot or held))
     trigger = None
     if active:
-        trigger = "held" if held else "soc+cell_voltage" if soc_hot and cell_hot else "cell_voltage" if cell_hot else "soc"
+        trigger = "held" if held else "cell_voltage"
     return active, resume, held, trigger

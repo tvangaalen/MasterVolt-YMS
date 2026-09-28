@@ -1,13 +1,19 @@
-"""Non-hardware self-test for Float protection: SOC/cell-voltage freshness and the dual trigger.
+"""Non-hardware self-test for Float protection: cell-voltage freshness and the trigger.
 
 Part 1 tests house_soc.py (age of each DALY reading, average of fresh readings, cell-voltage stats, decision table).
 Part 2 runs the real MasterBusService.enforce_high_soc_float loop with stubbed hardware access: no USB, no writes.
-Part 3 checks validation of the new cell-voltage settings (range, minimum gap to the resume level).
+Part 3 checks validation of the cell-voltage settings (range, minimum gap to the resume level) and that the SOC
+trigger and warning-duration setting, both removed in 1.17.0, are rejected as new input but still tolerated in an
+older user_settings.json.
 """
+import json
+import shutil
 import sys
+import tempfile
 import time
 import types
 from datetime import datetime, timezone
+from pathlib import Path
 
 try:
     import hid  # noqa: F401  (the USB HID module is only present on the boat PC)
@@ -77,26 +83,17 @@ def part1():
     assert hs.cell_voltage_stats(pre_computed, NOW, limit)["max_spread_mv"] == 999
     print("cell_voltage_stats(): highest cell and worst spread, stale batteries excluded: OK")
 
-    # ---- float_decision(): (active, resume, held, trigger) - SOC-only behaviour must be unchanged
-    f = hs.float_decision                                                      # (enabled, latched, soc, threshold, bulk)
-    assert f(True, False, 96, 95, 90) == (True, False, False, "soc")
-    assert f(True, False, 80, 95, 90) == (False, False, False, None)
-    assert f(True, True, 93, 95, 90) == (False, False, False, None), "unchanged: between the two thresholds nothing is forced and Bulk is not resumed"
-    assert f(True, True, 89, 95, 90) == (False, True, False, None), "a fresh SOC at or below the resume threshold ends Float"
-    assert f(True, True, None, 95, 90) == (True, False, True, "held"), "unknown SOC while latched: hold Float, never resume Bulk"
-    assert f(True, False, None, 95, 90) == (False, False, False, None), "unknown SOC must not start Float protection"
-    assert f(False, True, None, 95, 90) == (False, False, False, None) and f(False, True, 99, 95, 90) == (False, False, False, None)
-
-    # ---- the cell-voltage trigger: what CHANGELOG 1.13.0 was for - a low pack-average SOC must not mask a hot cell
-    assert f(True, False, 70, 95, 90, 3550, 3500, 3420) == (True, False, False, "cell_voltage"), "one hot cell must force Float even with a low SOC average"
-    assert f(True, False, 96, 95, 90, 3600, 3500, 3420) == (True, False, False, "soc+cell_voltage"), "both triggers can fire together"
-    assert f(True, False, 70, 95, 90, 3400, 3500, 3420) == (False, False, False, None), "a normal cell (below the trigger) does not force Float"
-    # resume needs the cell to have cooled down too, even when the SOC alone would already allow it
-    assert f(True, True, 85, 95, 90, 3550, 3500, 3420) == (True, False, False, "cell_voltage"), "Bulk must not resume while a cell is still above the resume level"
-    assert f(True, True, 85, 95, 90, 3400, 3500, 3420) == (False, True, False, None), "resumes once both the SOC and every cell are back within range"
-    # the cell reading is exactly what latched Float; if it goes stale, hold rather than resume on the SOC alone
-    assert f(True, True, 85, 95, 90, None, 3500, 3420) == (True, False, True, "held"), "a known, low SOC must not resume Bulk while the deciding cell reading is unknown"
-    print("Cell-voltage Float trigger: fires despite a low SOC average, blocks resume, held when the cell reading is unknown: OK")
+    # ---- float_decision(): (active, resume, held, trigger) - purely from the highest cell voltage; the SOC
+    # trigger was removed in 1.17.0 (see CHANGELOG), so the SOC average plays no part in this decision any more.
+    f = hs.float_decision                                                      # (enabled, latched, max_cell_mv, cell_trigger_mv, cell_resume_mv)
+    assert f(True, False, 3550, 3500, 3420) == (True, False, False, "cell_voltage"), "a cell at or above the trigger forces Float"
+    assert f(True, False, 3400, 3500, 3420) == (False, False, False, None), "a normal cell (below the trigger) does not force Float"
+    assert f(True, True, 3450, 3500, 3420) == (False, False, False, None), "between the trigger and the resume level nothing is forced and Bulk is not resumed"
+    assert f(True, True, 3400, 3500, 3420) == (False, True, False, None), "every cell at or below the resume level ends Float"
+    assert f(True, True, None, 3500, 3420) == (True, False, True, "held"), "unknown cell reading while latched: hold Float, never resume Bulk"
+    assert f(True, False, None, 3500, 3420) == (False, False, False, None), "an unknown cell reading must not start Float protection"
+    assert f(False, True, None, 3500, 3420) == (False, False, False, None) and f(False, True, 3600, 3500, 3420) == (False, False, False, None)
+    print("Cell-voltage Float trigger: starts, resumes, and holds on an unknown reading: OK")
 
 
 class Clock:
@@ -116,11 +113,13 @@ class Clock:
         self.count = 10 ** 9
 
 
-def run_loop(soc_at_tick, ticks, state=3, details=True, tick_action=None, cell_at_tick=None):
-    """Run the real loop. soc_at_tick(n) -> (soc or None, stale_batteries); cell_at_tick(n) -> (max_cell_mv or None,
-    battery name), optional. Returns the service and the writes."""
+def run_loop(cell_at_tick, ticks, state=3, details=True, tick_action=None, soc_at_tick=None):
+    """Run the real loop. cell_at_tick(n) -> (max_cell_mv or None, battery name); this alone drives the decision
+    since 1.17.0. soc_at_tick(n) -> SOC percent, purely informational (defaults to a constant 70%, deliberately
+    far below the old 95% threshold, to prove the SOC average no longer affects Float protection at all).
+    Returns the service and the writes."""
     service = MasterBusService()
-    service.settings.update({"float_protection_enabled": True, "house_battery_soc": 95, "bulk_resume_soc": 90})
+    service.settings.update({"float_protection_enabled": True})
     service.get_settings = lambda: dict(service.settings)
     writes, current = [], {"n": 0, "state": state}
     service.cached = lambda addr, field: current["state"]
@@ -143,21 +142,20 @@ def run_loop(soc_at_tick, ticks, state=3, details=True, tick_action=None, cell_a
         status = dict(service.float_policy_status)
         seen.append((n, status.get("soc_source"), status.get("float_latched"), status.get("soc_held")))
 
+    soc_fn = soc_at_tick or (lambda n: 70.0)
+
     def getter():
-        return soc_at_tick(current["n"])[0]
+        return soc_fn(current["n"])
 
     def detail_getter():
-        soc, stale = soc_at_tick(current["n"])
-        d = {"soc": soc, "fresh_batteries": 0 if soc is None else 3, "stale_batteries": stale, "youngest_age_seconds": 30.0 if soc is None else 4.0, "last_known_soc": 96.0}
-        if cell_at_tick:
-            max_cell_mv, battery = cell_at_tick(current["n"])
-        else:
-            # In the real app cell voltages come from the very same fresh/stale battery reading as SOC (see
-            # house_bms_soc_details()), so a scenario that does not care about cell voltage still needs a normal,
-            # non-alarming value whenever SOC is known - and None (unknown), same as SOC, once SOC goes stale.
-            max_cell_mv, battery = (None, None) if soc is None else (3390, None)
-        d["max_cell_mv"], d["max_cell_battery"] = max_cell_mv, battery
-        return d
+        soc = soc_fn(current["n"])
+        max_cell_mv, battery = cell_at_tick(current["n"])
+        stale = max_cell_mv is None
+        return {
+            "soc": soc, "fresh_batteries": 0 if stale else 3, "stale_batteries": 3 if stale else 0,
+            "youngest_age_seconds": 30.0 if stale else 4.0, "last_known_soc": 96.0,
+            "max_cell_mv": max_cell_mv, "max_cell_battery": battery,
+        }
 
     service.house_soc_getter = getter
     if details:
@@ -169,14 +167,14 @@ def run_loop(soc_at_tick, ticks, state=3, details=True, tick_action=None, cell_a
 
 
 def part2():
-    # a) fresh SOC above the threshold: Float is forced on a charging source
-    s, writes, _, _ = run_loop(lambda n: (96.0, 0), 4, state=1)
+    # a) a fresh cell at or above the trigger: Float is forced on a charging source
+    s, writes, _, _ = run_loop(lambda n: (3550, "BATTERY 1"), 4, state=1)
     assert ("float", "charger_house") in writes and s.float_policy_status["soc_source"] == "daly_bms" and not s.float_policy_status["soc_held"]
-    assert s.float_policy_status["trigger"] == "soc"
+    assert s.float_policy_status["trigger"] == "cell_voltage"
 
-    # b) latched, then the DALY data goes stale while a source is charging again: Float is still forced, Bulk is not resumed
+    # b) latched, then the cell reading goes stale while a source is charging again: Float is still forced, Bulk is not resumed
     def stale_after_three(n):
-        return (96.0, 0) if n <= 3 else (None, 3)
+        return (3550, "BATTERY 1") if n <= 3 else (None, None)
     def source_restarts(n, service, current):                                   # the solar charger starts a new charge cycle in the hold
         if n == 6:
             current["state"] = 1
@@ -184,24 +182,23 @@ def part2():
     s, writes, seen, _ = run_loop(stale_after_three, 12, state=3, tick_action=source_restarts)
     st = s.float_policy_status
     assert st["soc_source"] == "stale_hold" and st["soc_held"] and st["float_latched"] and st["active"], st
-    assert st["soc_stale"] and st["soc_fresh_batteries"] == 0 and st["last_known_soc"] == 96.0 and st["house_soc"] is None
-    assert ("float", "charger_house") in writes, "a source that restarts while the SOC is unknown must be put back in Float"
+    assert ("float", "charger_house") in writes, "a source that restarts while the cell reading is unknown must be put back in Float"
     assert not [w for w in writes if w[0] == "bulk"], "Bulk must never be resumed on stale data"
 
-    # c) latched, DALY returns with a low SOC: Bulk resumes on fresh data only
+    # c) latched, the cell reading returns cooled down: Bulk resumes on fresh data only
     def recover(n):
-        return (96.0, 0) if n <= 2 else ((None, 3) if n <= 6 else (85.0, 0))
+        return (3550, "BATTERY 1") if n <= 2 else ((None, None) if n <= 6 else (3400, "BATTERY 1"))
     s, writes, _, current = run_loop(recover, 12, state=3)
     assert ("bulk", "charger_house") in writes and not s.float_policy_status["float_latched"] and s.float_policy_status["soc_source"] == "daly_bms"
 
-    # d) never latched (for example just after a restart) and no fresh SOC: nothing is started
-    s, writes, _, _ = run_loop(lambda n: (None, 3), 6, state=1)
-    assert not writes and not s.float_policy_status["float_latched"] and s.float_policy_status["soc_source"] == "unavailable"
-    assert s.float_policy_status["soc_stale"]
+    # d) never latched (for example just after a restart) and no fresh cell reading: nothing is started
+    s, writes, _, _ = run_loop(lambda n: (None, None), 6, state=1)
+    assert not writes and not s.float_policy_status["float_latched"] and s.float_policy_status["max_cell_mv"] is None
 
-    # e) an old getter without details still works (unchanged behaviour)
-    s, writes, _, _ = run_loop(lambda n: (96.0, 0), 4, state=1, details=False)
-    assert ("float", "charger_house") in writes and s.float_policy_status["soc_fresh_batteries"] is None
+    # e) no details getter at all (a service that cannot report cell voltage): Float can never be told to start,
+    #    since it no longer has a plain-SOC fallback to trigger on (that was removed with the SOC trigger)
+    s, writes, _, _ = run_loop(lambda n: (3550, "BATTERY 1"), 4, state=1, details=False)
+    assert not writes and s.float_policy_status["max_cell_mv"] is None
 
     # f) protection disabled: never writes, latch cleared
     def disabled_run():
@@ -217,45 +214,40 @@ def part2():
         return calls, service.float_policy_status
     calls, status = disabled_run()
     assert not calls and not status["float_latched"]
-    print("Float loop: fresh SOC acts, stale SOC holds Float without resuming Bulk, unknown SOC never starts anything: OK")
+    print("Float loop: a fresh hot cell acts, a stale cell holds Float without resuming Bulk, an unknown cell never starts anything: OK")
 
-    # g) the reported failure mode: the pack-average SOC stays well under the threshold the whole time, but one
-    #    battery's cell reaches the (default) cell-voltage trigger - Float must engage on that alone
-    def low_average(n):
-        return (70.0, 0)
+    # g) the reported failure mode this was built for (CHANGELOG 1.13.0): the pack-average SOC stays well under
+    #    the old 95% threshold the whole time, but one battery's cell reaches the trigger - Float must engage on
+    #    that alone. Since 1.17.0 the SOC average cannot trigger Float at all any more, so this also proves that.
     def hot_cell(n):
         return (3400, None) if n <= 2 else (3550, "BATTERY 1")
-    s, writes, _, _ = run_loop(low_average, 6, state=1, cell_at_tick=hot_cell)
+    s, writes, _, _ = run_loop(hot_cell, 6, state=1, soc_at_tick=lambda n: 70.0)
     st = s.float_policy_status
     assert st["house_soc"] == 70.0 and st["active"] and st["trigger"] == "cell_voltage", st
-    assert ("float", "charger_house") in writes, "Float must engage on a hot cell even while the SOC average is far below its own threshold"
+    assert ("float", "charger_house") in writes, "Float must engage on a hot cell even while the SOC average stays low the whole time"
     assert st["max_cell_mv"] == 3550 and st["max_cell_battery"] == "BATTERY 1"
 
     # h) latched on a hot cell: Bulk must not resume while the cell stays above the resume level, even though the
-    #    SOC average is already below the Bulk-resume threshold the whole time
-    def low_soc(n):
-        return (80.0, 0)
+    #    (now irrelevant) SOC average is low the whole time
     def stays_hot(n):
         return (3550, "BATTERY 1")
-    s, writes, _, _ = run_loop(low_soc, 6, state=3, cell_at_tick=stays_hot)
-    assert not [w for w in writes if w[0] == "bulk"], "must not resume to Bulk while a cell is still above the resume level, even with a low SOC average"
+    s, writes, _, _ = run_loop(stays_hot, 6, state=3, soc_at_tick=lambda n: 80.0)
+    assert not [w for w in writes if w[0] == "bulk"], "must not resume to Bulk while a cell is still above the resume level"
     assert s.float_policy_status["float_latched"] and s.float_policy_status["trigger"] == "cell_voltage"
 
     # i) ... and does resume once the cell has cooled down too
     def cools_down(n):
         return (3550, "BATTERY 1") if n <= 3 else (3400, "BATTERY 1")
-    s, writes, _, _ = run_loop(low_soc, 8, state=3, cell_at_tick=cools_down)
+    s, writes, _, _ = run_loop(cools_down, 8, state=3)
     assert ("bulk", "charger_house") in writes and not s.float_policy_status["float_latched"]
 
-    # j) the cell reading is exactly what latched Float; if it goes stale, hold rather than resume on the SOC alone
-    def known_low_soc(n):
-        return (80.0, 0)
+    # j) the cell reading is exactly what latched Float; if it goes stale, hold rather than resume blind
     def cell_goes_stale(n):
         return (3550, "BATTERY 1") if n <= 2 else (None, None)
-    s, writes, _, _ = run_loop(known_low_soc, 6, state=3, cell_at_tick=cell_goes_stale)
+    s, writes, _, _ = run_loop(cell_goes_stale, 6, state=3)
     assert s.float_policy_status["float_latched"] and s.float_policy_status["trigger"] == "held", s.float_policy_status
-    assert not [w for w in writes if w[0] == "bulk"], "must not resume while the cell reading that latched Float has gone stale, even with a known, low SOC"
-    print("Cell-voltage trigger wired into the real loop: engages despite a low SOC, blocks resume, holds on a stale cell reading: OK")
+    assert not [w for w in writes if w[0] == "bulk"], "must not resume while the cell reading that latched Float has gone stale"
+    print("Cell-voltage trigger wired into the real loop: engages, blocks resume, holds on a stale cell reading: OK")
 
 
 def part3():
@@ -274,6 +266,30 @@ def part3():
     else:
         raise AssertionError("expected a ValueError for a resume level too close to the trigger")
     print("Cell-voltage settings validation (3300-3650 mV range, minimum 30 mV gap to the resume level): OK")
+
+    # the SOC trigger and its warning-duration setting were removed in 1.17.0: they must be rejected as unknown
+    # settings, but an older user_settings.json that still has them must keep loading (see _load_settings()).
+    for removed in ("house_battery_soc", "bulk_resume_soc", "warning_popup_seconds"):
+        try:
+            MasterBusService._validate_settings({removed: 1}, partial=True)
+        except ValueError:
+            continue
+        raise AssertionError(f"expected {removed} to be rejected as an unknown setting")
+    service = MasterBusService()
+    tmp_dir = tempfile.mkdtemp()
+    service.settings_file = Path(tmp_dir) / "user_settings.json"
+    service.settings_file.write_text(json.dumps({
+        "default_ac_limit": 12, "float_protection_enabled": True,
+        "house_battery_soc": 95.0, "bulk_resume_soc": 90.0,
+        "float_cell_trigger_mv": 3500.0, "float_cell_resume_mv": 3420.0, "warning_popup_seconds": 8,
+        "bms_refresh_interval": 30, "bms_popup_seconds": 3, "bms_connection_retry_seconds": 5,
+        "balancer_refresh_interval": 30, "balancer_connection_retry_seconds": 30, "history_retention_days": 7,
+    }), encoding="utf-8")
+    service._load_settings()
+    assert "house_battery_soc" not in service.settings and "warning_popup_seconds" not in service.settings
+    assert service.settings["float_cell_trigger_mv"] == 3500.0
+    shutil.rmtree(tmp_dir, ignore_errors=True)
+    print("An older user_settings.json with the removed SOC trigger and warning duration still loads: OK")
 
 
 if __name__ == "__main__":

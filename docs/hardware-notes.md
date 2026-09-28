@@ -107,38 +107,35 @@ subtracted from *Other DC Loads* so nothing is counted twice.
 `Pin = Pout / 0.85`, `Iin = Pin / Vin` (field 39). 85% is a deliberately conservative efficiency for its very low
 operating point.
 
-## Float protection (SOC and cell-voltage dual trigger)
+## Float protection (cell-voltage trigger)
 
 Runs server-side every 3 s, independent of any browser. Active Charger House, Solar and Alternator charging is forced
-to Float and verified (20 s retry cooldown) as soon as **either** of two triggers fires:
-
-- the DALY-average House SOC reaches *Switch to Float when SOC* (default 95%), or
-- the highest single cell voltage of any of the three batteries reaches *Also switch to Float when a cell reaches*
-  (default 3500 mV, settings `float_cell_trigger_mv`).
+to Float and verified (20 s retry cooldown) as soon as the highest single cell voltage of any of the three batteries
+reaches *Switch to Float when any cell reaches* (default 3500 mV, settings `float_cell_trigger_mv`). It switches back
+to Bulk only once every cell is at or below *Switch to Bulk once every cell is at or below* (default 3420 mV,
+`float_cell_resume_mv`, at least 30 mV below the trigger). Inactive sources are never switched on. Status is in
+`/api/energy` as `high_soc_float_policy`, which names the active condition via `trigger` (`"cell_voltage"` or
+`"held"`).
 
 The cell-voltage trigger was added in 1.13.0 after 10 days of stored history showed 44 cell-voltage/imbalance alarm
-episodes (several ending in the BMS itself cutting the charge MOSFET) while the SOC average was as low as 58-91% -
-three parallel batteries do not necessarily reach a high SOC together, and one battery's own coulomb-counted SOC can
-already read 100%, with one of its cells already inside DALY's own high-voltage alarm band (observed starting around
-3550-3600 mV; a normal full-charge cell sits around 3360-3390 mV), while the pack average is nowhere near 95%. No DALY
-alarm-threshold registers are read or changed; 3500 mV is the app's own, independently-chosen figure.
+episodes (several ending in the BMS itself cutting the charge MOSFET) while the average House SOC was as low as
+58-91% - three parallel batteries do not necessarily reach a high SOC together, and one battery's own coulomb-counted
+SOC can already read 100%, with one of its cells already inside DALY's own high-voltage alarm band (observed starting
+around 3550-3600 mV; a normal full-charge cell sits around 3360-3390 mV), while the pack average was nowhere near the
+95% the SOC trigger used to sit at. **1.17.0 removed the SOC trigger entirely**: Float protection now reacts only to
+cell voltage. No DALY alarm-threshold registers are read or changed; 3500 mV is the app's own, independently-chosen
+figure.
 
-It switches back to Bulk only once **both** signals are back in range: SOC at or below *Switch to Bulk when SOC* (at
-least 5 points lower, default 90%) **and** every cell at or below *Switch to Bulk once every cell is at or below*
-(default 3420 mV, `float_cell_resume_mv`, at least 30 mV below the trigger). Inactive sources are never switched on.
-Status is in `/api/energy` as `high_soc_float_policy`, which also names which condition is active via `trigger`
-(`"soc"`, `"cell_voltage"`, `"soc+cell_voltage"` or `"held"`).
-
-Only *fresh* readings count (`house_soc.py`): each battery's reading must be younger than max(120 s, 4 x the BMS
-refresh interval). The SOC is the average of the fresh batteries, and the cell-voltage figures come from the same
-fresh set (`cell_voltage_stats()`); if none is fresh, both are unknown. While Float is latched and either signal is
-unknown the policy *holds*: sources that (re)start charging are still forced to Float, and Bulk is never resumed on
-old data (`soc_source` = `stale_hold`, plus `soc_stale`, `soc_fresh_batteries`, `soc_age_seconds`, `last_known_soc`,
-`max_cell_mv`, `max_cell_battery`). Neither an unknown SOC nor an unknown cell voltage ever starts Float protection by
-itself. The **cell spread** (worst cell-to-cell difference within a battery, `max_spread_mv`/`max_spread_battery`) is
-reported for the same reason but is deliberately informational only - not wired into the trigger, so a brief,
-harmless imbalance mid-charge cannot stall normal Bulk charging. There is deliberately no MasterShunt fallback (see
-above).
+Only *fresh* cell readings count (`house_soc.py`, `cell_voltage_stats()`): each battery's reading must be younger
+than max(120 s, 4 x the BMS refresh interval); if none is fresh, the highest cell voltage is unknown. While Float is
+latched and the cell reading is unknown the policy *holds*: sources that (re)start charging are still forced to
+Float, and Bulk is never resumed on old data (`soc_source` = `stale_hold`, `max_cell_mv`, `max_cell_battery`). An
+unknown cell voltage never starts Float protection by itself. The **cell spread** (worst cell-to-cell difference
+within a battery, `max_spread_mv`/`max_spread_battery`) is reported for the same reason but is deliberately
+informational only - not wired into the trigger, so a brief, harmless imbalance mid-charge cannot stall normal Bulk
+charging. The DALY-average House SOC (`house_soc()`) is still computed and shown on the Control panel and in
+`/api/energy` for information (`soc_fresh_batteries`, `soc_age_seconds`, `last_known_soc`), but no longer affects
+Float protection at all. There is deliberately no MasterShunt fallback (see above).
 
 ## DALY BMS / balancer notes
 
@@ -146,7 +143,7 @@ above).
 - **Balancers** (`DL-BAL1`–`3`): monitored directly over their own FFF1 characteristic, read-only. Balance current is the current byte of response `0x93` at 0.01 A/LSB; the `0x90` pack current is unrelated.
 - **Bluetooth coordination:** one Windows machine cannot hold six reliable GATT sessions, so a single priority queue arbitrates the radio: user controls > manual BMS refresh/reconnect > automatic reconnect > automatic BMS reads > balancer traffic. BMS links are persistent (one thread + event loop each); balancers connect, read and disconnect one at a time once all BMS links are stable.
 - **Bluetooth robustness (1.12):** every Windows BLE call has a hard deadline (`asyncio.wait_for`), a half-open client is always disconnected, and coordinator leases carry a token and a maximum hold time so a hung call can never keep the radio. A balancer that keeps failing backs off exponentially (retry x 2^n, at most 5 min) without slowing the others; a stall watchdog forces a rescan, then rebuilds the balancer worker, and flags it as *wedged*. A balancer or BMS status is published only when all nine DALY commands were answered, and unanswered commands are asked once more. With one BMS unreachable for 2 minutes the balancers are allowed again (*degraded* mode). Events, per-device counters and timings: `logs/bluetooth.log` and `GET /api/bluetooth-events` (`counters.<device>.timings.<connect|notify|read|disconnect|radio_wait|radio_hold|scan>` with count, average, median, p95 and maxima of successful and failed attempts; use these, not guesses, to choose time-outs). `counters.<device>.signal` holds the advertisement signal strength (RSSI, dBm: last, average, recent average, min, max) of every DALY device seen in a scan; the balancer scan log line also lists the signal of each device and of balancers that were visible but not looked for. Roughly, -50 to -70 dBm is a good link, below about -85 dBm is marginal. Background: in the analysed history the balancers were silent 29% of the time, every gap ending at a server restart; Battery 2's link was lost 4.3% of the time against 0.3% for Battery 1 and 3.
-- **Voltage-derived SOC** (*SOC - Charging* / *SOC - Discharging*) interpolates the average cell voltage against LiFePO4 reference curves. These are comparison indicators; `Set SOC - charge/discharge` writes the same values to the BMS.
+- **Voltage-derived SOC** (*SOC - Charging* / *SOC - Discharging*) interpolates the average cell voltage against LiFePO4 reference curves. These are comparison indicators; `Set SOC - charge/discharge` writes the same values to the BMS. A manual percentage can also be written directly (`set_soc_value`, `POST /api/bms/{id}/set-soc-value` or `/api/bms/set-all-soc/value`, body `{"percent": N}`), using the same `0x21` register (value x10).
 
 ## Utility scripts
 

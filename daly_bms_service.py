@@ -372,10 +372,16 @@ class _BatteryWorker:
             average=sum(cells)/len(cells) if cells else None
             soc_charge=soc_from_average_mv(average,SOC_CHARGING_POINTS) if average is not None else None
             soc_discharge=soc_from_average_mv(average,SOC_DISCHARGING_POINTS) if average is not None else None
+            manual_percent=None
+            if action=="set_soc_value":
+                try:manual_percent=float(enabled)
+                except (TypeError,ValueError):raise RuntimeError(f"{self.name}: invalid manual SOC value")
+                if not 0<=manual_percent<=100:raise RuntimeError(f"{self.name}: SOC must be between 0 and 100%")
             commands={
                 "set_soc_100":(0x21,b"\0"*6+(1000).to_bytes(2,"big")),
                 "set_soc_charge":(0x21,b"\0"*6+int(round((soc_charge or 0)*10)).to_bytes(2,"big")),
                 "set_soc_discharge":(0x21,b"\0"*6+int(round((soc_discharge or 0)*10)).to_bytes(2,"big")),
+                "set_soc_value":(0x21,b"\0"*6+int(round((manual_percent or 0)*10)).to_bytes(2,"big")),
                 "charge":(0xDA,b"\x01" if enabled else b"\x00"),
                 "discharge":(0xD9,b"\x01" if enabled else b"\x00"),
             }
@@ -468,7 +474,7 @@ class _BatteryWorker:
             # Explicitly yield once so run_coroutine_threadsafe can deliver the
             # successful result before any background work is considered.
             await asyncio.sleep(0)
-            selected={"set_soc_charge":soc_charge,"set_soc_discharge":soc_discharge}.get(action)
+            selected={"set_soc_charge":soc_charge,"set_soc_discharge":soc_discharge,"set_soc_value":manual_percent}.get(action)
             return {"changed":True,"battery":self.name,"action":action,"enabled":enabled,"soc_percent":selected}
 
     async def _run(self):
@@ -620,7 +626,7 @@ class DalyBmsService:
 
     def control(self,name,action,enabled=None):
         if name not in DEVICE_NAMES:raise ValueError("Unknown battery")
-        if action not in {"set_soc_100","set_soc_charge","set_soc_discharge","charge","discharge"}:raise ValueError("Unknown BMS action")
+        if action not in {"set_soc_100","set_soc_charge","set_soc_discharge","set_soc_value","charge","discharge"}:raise ValueError("Unknown BMS action")
         self._backup([name])
         self._set_control_status(busy=True,phase="waiting",message="Waiting for Bluetooth queue to become available",current=0,total=1)
         owns_radio=False
@@ -633,8 +639,8 @@ class DalyBmsService:
             if owns_radio:bluetooth_coordinator.release("bms_control",owns_radio)
             self._set_control_status(busy=False,phase="idle",message="",current=0,total=0)
 
-    def control_all(self,action):
-        if action not in {"set_soc_100","set_soc_charge","set_soc_discharge","charge_on","charge_off","discharge_on","discharge_off"}:raise ValueError("Unknown BMS action")
+    def control_all(self,action,percent=None):
+        if action not in {"set_soc_100","set_soc_charge","set_soc_discharge","set_soc_value","charge_on","charge_off","discharge_on","discharge_off"}:raise ValueError("Unknown BMS action")
         targets=list(DEVICE_NAMES)
         if action.startswith("charge_"):
             desired=action.endswith("_on");targets=[name for name in DEVICE_NAMES if self._battery(name).get("charge_mosfet_on") is not desired]
@@ -655,6 +661,7 @@ class DalyBmsService:
                     self._set_control_status(phase="updating",message=f"Updating Battery {index}/{total}",current=index)
                     if action.startswith("charge_"):single="charge";enabled=action.endswith("_on")
                     elif action.startswith("discharge_"):single="discharge";enabled=action.endswith("_on")
+                    elif action=="set_soc_value":single=action;enabled=percent
                     else:single=action;enabled=None
                     results[name]=self._run_control(name,single,enabled);completed.append(name)
                 except Exception as exc:

@@ -36,11 +36,8 @@ class MasterBusService:
         self.settings={
             "default_ac_limit":15,
             "float_protection_enabled":True,
-            "house_battery_soc":95.0,
-            "bulk_resume_soc":90.0,
             "float_cell_trigger_mv":3500.0,
             "float_cell_resume_mv":3420.0,
-            "warning_popup_seconds":8,
             "bms_refresh_interval":30,
             "bms_popup_seconds":3,
             "bms_connection_retry_seconds":5,
@@ -51,8 +48,6 @@ class MasterBusService:
         self._load_settings()
         self.float_policy_status={
             "enabled":self.settings["float_protection_enabled"],
-            "threshold_soc":self.settings["house_battery_soc"],
-            "bulk_resume_soc":self.settings["bulk_resume_soc"],
             "cell_trigger_mv":self.settings["float_cell_trigger_mv"],
             "cell_resume_mv":self.settings["float_cell_resume_mv"],
             "active":False,"house_soc":None,"max_cell_mv":None,"max_cell_battery":None,
@@ -67,10 +62,12 @@ class MasterBusService:
         try:
             raw=json.loads(self.settings_file.read_text(encoding="utf-8"))
             if not isinstance(raw,dict):return
-            # Migrate the former current-delta setting to SOC hysteresis.
-            if "bulk_resume_soc" not in raw:
-                raw["bulk_resume_soc"]=max(0,float(raw.get("house_battery_soc",95))-5)
-            raw.pop("bulk_resume_delta",None)
+            # Settings removed in past releases are ignored so an older user_settings.json still loads: the
+            # SOC trigger (house_battery_soc, bulk_resume_soc) was removed in 1.17.0 - Float protection is now
+            # triggered purely by cell voltage (CHANGELOG 1.17.0) - and warning_popup_seconds in the same release,
+            # since the Float warning now always needs an explicit OK instead of closing itself.
+            for legacy in ("bulk_resume_delta","house_battery_soc","bulk_resume_soc","warning_popup_seconds"):
+                raw.pop(legacy,None)
             self._validate_settings(raw,partial=True)
             self.settings.update({k:raw[k] for k in self.settings if k in raw})
         except Exception:
@@ -80,7 +77,7 @@ class MasterBusService:
     def _validate_settings(values,partial=False):
         required={
             "default_ac_limit","float_protection_enabled",
-            "house_battery_soc","bulk_resume_soc","float_cell_trigger_mv","float_cell_resume_mv","warning_popup_seconds","bms_refresh_interval","bms_popup_seconds","bms_connection_retry_seconds","balancer_refresh_interval","balancer_connection_retry_seconds","history_retention_days",
+            "float_cell_trigger_mv","float_cell_resume_mv","bms_refresh_interval","bms_popup_seconds","bms_connection_retry_seconds","balancer_refresh_interval","balancer_connection_retry_seconds","history_retention_days",
         }
         if not partial and set(values)!=required:
             raise ValueError("All settings fields are required")
@@ -92,17 +89,6 @@ class MasterBusService:
                 raise ValueError("Default AC limit must be a whole number from 3 to 15 A")
         if "float_protection_enabled" in values and not isinstance(values["float_protection_enabled"],bool):
             raise ValueError("Float protection must be on or off")
-        if "house_battery_soc" in values:
-            value=values["house_battery_soc"]
-            if isinstance(value,bool) or not 50<=float(value)<=100:
-                raise ValueError("Switch to Float SOC must be between 50 and 100%")
-        if "bulk_resume_soc" in values:
-            value=values["bulk_resume_soc"]
-            if isinstance(value,bool) or not 0<=float(value)<=95:
-                raise ValueError("Switch to Bulk SOC must be between 0 and 95%")
-        if "house_battery_soc" in values and "bulk_resume_soc" in values:
-            if float(values["bulk_resume_soc"])>float(values["house_battery_soc"])-5:
-                raise ValueError("Switch to Bulk when SOC must be at least 5% lower than Switch to Float when SOC")
         if "float_cell_trigger_mv" in values:
             value=values["float_cell_trigger_mv"]
             if isinstance(value,bool) or not 3300<=float(value)<=3650:
@@ -114,10 +100,6 @@ class MasterBusService:
         if "float_cell_trigger_mv" in values and "float_cell_resume_mv" in values:
             if float(values["float_cell_resume_mv"])>float(values["float_cell_trigger_mv"])-30:
                 raise ValueError("Float cell-voltage resume level must be at least 30 mV below the trigger")
-        if "warning_popup_seconds" in values:
-            value=values["warning_popup_seconds"]
-            if isinstance(value,bool) or int(value)!=value or not 1<=int(value)<=60:
-                raise ValueError("Warning pop-duration must be a whole number from 1 to 60 seconds")
         if "bms_refresh_interval" in values:
             value=values["bms_refresh_interval"]
             if isinstance(value,bool) or int(value)!=value or not 5<=int(value)<=300:
@@ -151,11 +133,8 @@ class MasterBusService:
         normalized={
             "default_ac_limit":int(values["default_ac_limit"]),
             "float_protection_enabled":bool(values["float_protection_enabled"]),
-            "house_battery_soc":float(values["house_battery_soc"]),
-            "bulk_resume_soc":float(values["bulk_resume_soc"]),
             "float_cell_trigger_mv":float(values["float_cell_trigger_mv"]),
             "float_cell_resume_mv":float(values["float_cell_resume_mv"]),
-            "warning_popup_seconds":int(values["warning_popup_seconds"]),
             "bms_refresh_interval":int(values["bms_refresh_interval"]),
             "bms_popup_seconds":int(values["bms_popup_seconds"]),
             "bms_connection_retry_seconds":int(values["bms_connection_retry_seconds"]),
@@ -169,8 +148,6 @@ class MasterBusService:
             temporary.replace(self.settings_file)
             self.settings=normalized
         self.float_policy_status["enabled"]=normalized["float_protection_enabled"]
-        self.float_policy_status["threshold_soc"]=normalized["house_battery_soc"]
-        self.float_policy_status["bulk_resume_soc"]=normalized["bulk_resume_soc"]
         return dict(normalized)
 
     def _load_mastershunt_config_maps(self):
@@ -755,7 +732,7 @@ class MasterBusService:
         return {"changed":True,"state":value,"samples":samples}
 
     def enforce_high_soc_float(self):
-        """Keep active house charging sources in Float at the configured SoC."""
+        """Keep active house charging sources in Float once any cell reaches the configured trigger voltage."""
         sources=(
             # name, address, Float event/commit, Bulk event/commit, state field
             ("charger_house",COMBIMASTER,42,43,38,39,1),
@@ -772,29 +749,24 @@ class MasterBusService:
                 else:bms_soc=self.house_soc_getter() if callable(getattr(self,"house_soc_getter",None)) else None
             except Exception:
                 details=None;bms_soc=None
-            # Do not fall back to MasterShunt here: the Dashboard's authoritative
-            # House SOC is DALY. Until DALY has produced a valid reading, Float
-            # protection waits rather than acting on a conflicting SOC value.
+            # The House SOC is kept here only for information - the Dashboard shows the same DALY-average figure
+            # separately. Float protection no longer reacts to it at all (SOC trigger removed, CHANGELOG 1.17.0):
+            # it is triggered purely by the highest single cell voltage, because three parallel batteries do not
+            # necessarily reach a high SOC together and the pack average can badly lag one battery's own runaway
+            # cell (see CHANGELOG 1.13.0). The cell spread is informational only and never forces Float.
             soc=bms_soc
             soc_source="daly_bms" if bms_soc is not None else "unavailable"
             try:soc_value=None if soc is None else float(soc)
             except (TypeError,ValueError):soc_value=None
             enabled=settings["float_protection_enabled"]
-            threshold=settings["house_battery_soc"]
-            bulk_threshold=settings["bulk_resume_soc"]
             cell_trigger_mv=settings["float_cell_trigger_mv"]
             cell_resume_mv=settings["float_cell_resume_mv"]
             max_cell_mv=None if details is None else details.get("max_cell_mv")
-            # A SOC that is missing or older than the freshness limit (DALY link down) counts as unknown. While Float is
-            # latched that holds the sources in Float (never resumes Bulk on old data); it never starts Float by itself.
-            # Float also starts on a single cell reaching cell_trigger_mv: three parallel batteries do not necessarily
-            # reach a high SOC together, and the pack-average SOC can badly lag one battery's own runaway cell (see
-            # CHANGELOG 1.13.0). The cell spread is informational only (float_policy_status) and never forces Float.
-            active,resume,held,trigger=float_decision(enabled,self.float_policy_status.get("float_latched"),soc_value,threshold,bulk_threshold,max_cell_mv,cell_trigger_mv,cell_resume_mv)
+            # A missing/stale cell reading (DALY link down) counts as unknown. While Float is latched that holds
+            # the sources in Float (never resumes Bulk on old data); it never starts Float by itself.
+            active,resume,held,trigger=float_decision(enabled,self.float_policy_status.get("float_latched"),max_cell_mv,cell_trigger_mv,cell_resume_mv)
             if held:soc_source="stale_hold"
             self.float_policy_status["enabled"]=enabled
-            self.float_policy_status["threshold_soc"]=threshold
-            self.float_policy_status["bulk_resume_soc"]=bulk_threshold
             self.float_policy_status["cell_trigger_mv"]=cell_trigger_mv
             self.float_policy_status["cell_resume_mv"]=cell_resume_mv
             self.float_policy_status["house_soc"]=soc_value
