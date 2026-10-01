@@ -366,7 +366,7 @@ function render(d){
  else if(floatEvent>lastFloatEvent){lastFloatEvent=floatEvent;const trigger=d.high_soc_float_policy?.trigger,cellBattery=d.high_soc_float_policy?.max_cell_battery;const reason=trigger==='held'?'Cell-voltage data is unavailable, so Float protection is being held on':`${cellBattery||'A battery'} reached ${cellTrigger} mV on one cell`;$('floatInfoText').textContent=`${reason}. Charger House, Alternator, and Solar have been switched to Float.`;showFloatInfo()}
  if(lastBulkEvent===null)lastBulkEvent=bulkEvent;
  else if(bulkEvent>lastBulkEvent){lastBulkEvent=bulkEvent;$('floatInfoText').textContent=`Every cell is at or below ${cellResume} mV. Charger House, Alternator, and Solar have been switched to Bulk.`;showFloatInfo()}
- $('disc').textContent=`Cache ${d.cache_items} values · verified fixed field map · v1.18.0`;
+ $('disc').textContent=`Cache ${d.cache_items} values · verified fixed field map · v1.18.1`;
 }
 async function refresh(){if(busy)return;try{let r=await fetch('/api/energy',{cache:'no-store'}),d=await r.json();if(!r.ok)throw Error(d.detail||'request failed');render(d);$('offline').style.display='none';$('dot').className='dot';showErr('')}catch(e){if(lastGood)render(lastGood);$('offline').style.display='block';$('dot').className='dot off';showErr(e.message)}}
 async function post(u,p){busy=true;try{let r=await fetch(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)}),d=await r.json();if(!r.ok)throw Error(d.detail||'control failed')}catch(e){showErr(e.message)}finally{busy=false;refresh()}}
@@ -781,7 +781,7 @@ function scheduleDenseHistoryView(view){
  // views, but a short preset/zoom can then land on an uneven, sparse slice of it and render as broken-looking
  // disconnected bars). For a short-enough view, quietly fetch that exact window at full resolution and re-render.
  if((view.end-view.start)/3600000>48)return;
- historyDenseTimer=setTimeout(()=>refreshDenseHistoryView(view,seq),300)
+ historyDenseTimer=setTimeout(()=>refreshDenseHistoryView(view,seq),120)
 }
 async function refreshDenseHistoryView(view,seq){
  try{

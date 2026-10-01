@@ -108,17 +108,31 @@ class HistoryService:
             if self._bms_chart_cache is None:self._bms_chart_cache=[]
             if self._dashboard_chart_cache is None:self._dashboard_chart_cache=[]
             self._bms_chart_cache.extend(bms["points"]);self._dashboard_chart_cache.extend(dashboard["points"])
-            self._bms_chart_cache=[p for p in self._bms_chart_cache if p["id"]>=bms["earliest_id"]]
-            self._dashboard_chart_cache=[p for p in self._dashboard_chart_cache if p["id"]>=dashboard["earliest_id"]]
+            # Retention pruning only actually removes rows once the oldest cached point falls outside the kept
+            # window (which, with a 31-day default, had not happened once in the cache's first three weeks live);
+            # skip the trim below whenever there is nothing to trim, and use the same O(log n) bisect as chart_data()
+            # when there is, instead of rebuilding the whole (now a few hundred thousand entries) list every call -
+            # this used to run unconditionally every ~60 s (changelog 1.18.1).
+            if self._bms_chart_cache and self._bms_chart_cache[0]["id"]<bms["earliest_id"]:
+                start=bisect_left(self._bms_chart_cache,bms["earliest_id"],key=lambda p:p["id"])
+                self._bms_chart_cache=self._bms_chart_cache[start:]
+            if self._dashboard_chart_cache and self._dashboard_chart_cache[0]["id"]<dashboard["earliest_id"]:
+                start=bisect_left(self._dashboard_chart_cache,dashboard["earliest_id"],key=lambda p:p["id"])
+                self._dashboard_chart_cache=self._dashboard_chart_cache[start:]
             return len(bms["points"])+len(dashboard["points"])
 
     def chart_data(self,hours:float,refresh:bool=False):
         with self.lock:
             if refresh or self._bms_chart_cache is None or self._dashboard_chart_cache is None:self.refresh_chart_cache()
-            all_points=self._bms_chart_cache+self._dashboard_chart_cache
-            latest=max((p["captured_at"] for p in all_points),default=datetime.now(timezone.utc).isoformat())
+            bms_cache=self._bms_chart_cache;dashboard_cache=self._dashboard_chart_cache
+            # Both caches are append-only in id order (refresh_chart_cache only ever extends them), so captured_at
+            # is already sorted - bisect finds the cutoff in O(log n). This used to scan the whole cache on every
+            # call (all_points=...+...; two full-list filters), costing 400-750 ms once it held weeks of history
+            # and making every History preset/zoom change sluggish (changelog 1.18.1).
+            latest=max(cache[-1]["captured_at"] for cache in (bms_cache,dashboard_cache) if cache) if (bms_cache or dashboard_cache) else datetime.now(timezone.utc).isoformat()
             cutoff=(datetime.fromisoformat(latest)-timedelta(hours=max(.25,float(hours)))).isoformat()
-            bms_full=[p for p in self._bms_chart_cache if p["captured_at"]>=cutoff];dashboard_full=[p for p in self._dashboard_chart_cache if p["captured_at"]>=cutoff]
+            bms_start=bisect_left(bms_cache,cutoff,key=lambda p:p["captured_at"]);dashboard_start=bisect_left(dashboard_cache,cutoff,key=lambda p:p["captured_at"])
+            bms_full=bms_cache[bms_start:];dashboard_full=dashboard_cache[dashboard_start:]
             def sample(points,maximum):
                 if len(points)<=maximum:return points
                 step=(len(points)-1)/(maximum-1)

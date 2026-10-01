@@ -130,5 +130,85 @@ def main():
     print("All history contribution checks: OK")
 
 
+def chart_data_test():
+    """chart_data(hours=...) must return exactly the points within that window (bisect cutoff, changelog 1.18.1)
+    and stay fast regardless of total cache size - it used to rescan the whole cache on every call (all_points=
+    bms+dashboard, two full-list filters), which cost 400-750 ms once it held a few weeks of real history and
+    made every History preset/zoom change sluggish."""
+    import time
+    with tempfile.TemporaryDirectory(prefix="hist chart ") as tmp:
+        history = HistoryService(Path(tmp) / "history.sqlite3")
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        total = 150_000
+        # Build the caches directly, exactly as refresh_chart_cache() would leave them (append-only, id order),
+        # without the overhead of writing/reading 300k+ rows through SQLite.
+        history._bms_chart_cache = [
+            {"id": i + 1, "captured_at": (now - timedelta(seconds=(total - i) * 10)).isoformat(),
+             "battery": "BATTERY 1", "voltage": 13.2, "current": 0.0, "remaining": 200.0,
+             "cells": "3300 3300 3300 3300", "cell_spread": 0, "alarms": "", "charge_mos": True, "discharge_mos": True}
+            for i in range(total)
+        ]
+        history._dashboard_chart_cache = [
+            {"id": i + 1, "captured_at": (now - timedelta(seconds=(total - i) * 10)).isoformat(),
+             "source_power": [0.0, 0.0, 0.0], "source_current": [0.0, 0.0, 0.0], "shore_voltage": 0.0,
+             "shore_connected": False, "solar_panel_voltage": 0.0, "alternator_temperature": 0.0,
+             "alternator_running": False, "load_power": [0.0] * 6, "load_current": [0.0] * 6,
+             "ac_power": 0.0, "ac_frequency": 0.0, "inverting": False, "supporting": False}
+            for i in range(total)
+        ]
+        # Correctness: the bisect cutoff must match a plain, independent linear scan at every zoom level.
+        for hours in (0.25, 1, 4, 24, 100, 10_000):
+            data = history.chart_data(hours)
+            cutoff = (datetime.fromisoformat(data["latest"]) - timedelta(hours=max(.25, hours))).isoformat()
+            expected_bms = sum(1 for p in history._bms_chart_cache if p["captured_at"] >= cutoff)
+            expected_dash = sum(1 for p in history._dashboard_chart_cache if p["captured_at"] >= cutoff)
+            assert data["bms_count"] == expected_bms, f"bms_count mismatch at hours={hours}: {data['bms_count']} != {expected_bms}"
+            assert data["dashboard_count"] == expected_dash, f"dashboard_count mismatch at hours={hours}: {data['dashboard_count']} != {expected_dash}"
+        print(f"chart_data() cutoff matches a direct linear scan, {total:,} points per cache, at every zoom level: OK")
+
+        # Performance: a short window must stay fast regardless of total cache size (bisect, not a full scan).
+        start = time.perf_counter()
+        for _ in range(20):
+            history.chart_data(4)
+        elapsed_ms = (time.perf_counter() - start) * 1000 / 20
+        assert elapsed_ms < 50, f"chart_data(4) averaged {elapsed_ms:.1f} ms over {total:,}-point caches - the cutoff may be scanning the whole cache again"
+        print(f"chart_data(4) over {total:,}-point caches: {elapsed_ms:.2f} ms average (was 400-750 ms live before the bisect fix): OK")
+
+
+def refresh_chart_cache_trim_test():
+    """refresh_chart_cache()'s retention trim must only rebuild the cached list when something was actually
+    pruned (skipped via an O(1) check, bisect otherwise, instead of an unconditional full rebuild every ~60 s -
+    changelog 1.18.1), and still end up with exactly the rows that survived pruning."""
+    with tempfile.TemporaryDirectory(prefix="hist trim ") as tmp:
+        history = HistoryService(Path(tmp) / "history.sqlite3")
+        now = datetime.now(timezone.utc)
+        old_stamp = (now - timedelta(days=2)).isoformat()
+        for _ in range(5):
+            history.record("dashboard", {"sources": {}, "consumers": {}}, captured_at=old_stamp)
+        recent_stamps = [(now - timedelta(seconds=s)).isoformat() for s in (40, 30, 20, 10, 0)]
+        for stamp in recent_stamps:
+            history.record("dashboard", {"sources": {}, "consumers": {}}, captured_at=stamp)
+
+        history.refresh_chart_cache()
+        assert len(history._dashboard_chart_cache) == 10, "all 10 rows should be cached before anything is pruned"
+
+        deleted = history.prune(1)                                            # the minimum retention is 1 day
+        assert deleted == 5, f"expected the 5 two-day-old rows to be pruned, deleted {deleted}"
+
+        before = history._dashboard_chart_cache
+        history.refresh_chart_cache()
+        after = history._dashboard_chart_cache
+        assert after is not before, "the cache must be rebuilt the one time something was actually pruned"
+        assert len(after) == 5 and all(p["captured_at"] in recent_stamps for p in after), "only the 5 surviving rows should remain"
+        print("refresh_chart_cache() trims exactly the rows retention pruning removed: OK")
+
+        unchanged = history._dashboard_chart_cache
+        history.refresh_chart_cache()                                         # nothing new to prune this time
+        assert history._dashboard_chart_cache is unchanged, "the cache must not be rebuilt when nothing was pruned"
+        print("refresh_chart_cache() skips the trim rebuild when nothing was pruned: OK")
+
+
 if __name__ == "__main__":
     main()
+    chart_data_test()
+    refresh_chart_cache_trim_test()
