@@ -79,6 +79,21 @@ def available_house_bms_soc():return house_bms_soc_details()["soc"]
 service.house_soc_getter=available_house_bms_soc
 service.house_soc_details_getter=house_bms_soc_details
 
+def _force_all_soc_100():
+    """Fire-and-forget, called once when Float protection freshly latches: the triggering cell is at/above the
+    Float voltage (effectively full), so bring every battery's reported SOC to 100% rather than let it sit on a
+    stale coulomb-counted value until the next full discharge recalibrates it. Runs in its own thread so a slow
+    or failing Bluetooth write cannot delay the 3 s Float loop that is forcing the MasterBus sources to Float."""
+    try:
+        bms_service.control_all("set_soc_100")
+    except Exception as e:
+        print("Float->100% SOC WARNING:",e)
+
+def _trigger_all_soc_100():
+    threading.Thread(target=_force_all_soc_100,daemon=True,name="float-soc-100").start()
+
+service.float_started_callback=_trigger_all_soc_100
+
 
 def _is_benign_client_disconnect(exc):
     """
@@ -147,7 +162,7 @@ async def lifespan(app):
     try: await asyncio.to_thread(balancer_service.stop)
     except: pass
 
-app=FastAPI(title="Mastervolt Energy",version="1.17.0",lifespan=lifespan)
+app=FastAPI(title="Mastervolt Energy",version="1.18.0",lifespan=lifespan)
 app.add_middleware(GZipMiddleware,minimum_size=1000)
 app.mount("/static",StaticFiles(directory=STATIC),name="static")
 
@@ -348,22 +363,26 @@ async def bms_discharge(battery_id:int,req:BoolReq):
 
 @app.post("/api/control/inverter")
 async def inverter(req:BoolReq):
+    service.clear_active_mode()
     try:return await asyncio.to_thread(service.set_inverter,req.enabled)
     except Exception as e:raise HTTPException(500,detail=str(e))
 
 @app.post("/api/control/charger")
 async def charger(req:BoolReq):
+    service.clear_active_mode()
     try:return await asyncio.to_thread(service.set_charger,req.enabled)
     except Exception as e:raise HTTPException(500,detail=str(e))
 
 @app.post("/api/control/ac-limit")
 async def limit(req:LimitReq):
+    service.clear_active_mode()
     try:return await asyncio.to_thread(service.set_ac_limit,req.amps)
     except ValueError as e:raise HTTPException(400,detail=str(e))
     except Exception as e:raise HTTPException(500,detail=str(e))
 
 @app.post("/api/control/ac-support")
 async def ac_support(req:BoolReq):
+    service.clear_active_mode()
     try:return await asyncio.to_thread(service.set_ac_support,req.enabled)
     except Exception as e:raise HTTPException(409,detail=str(e))
 
@@ -376,6 +395,7 @@ async def operating_mode(req:ModeReq):
 
 @app.post("/api/control/device/{name}")
 async def device_control(name: str, req: BoolReq):
+    service.clear_active_mode()
     try:
         return await asyncio.to_thread(service.set_device_control, name, req.enabled)
     except ValueError as e:
@@ -386,6 +406,7 @@ async def device_control(name: str, req: BoolReq):
 
 @app.post("/api/control/alternator")
 async def alternator_control(req: BoolReq):
+    service.clear_active_mode()
     try:
         return await asyncio.to_thread(service.set_alternator_enabled, req.enabled)
     except Exception as e:

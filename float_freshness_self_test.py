@@ -133,6 +133,8 @@ def run_loop(cell_at_tick, ticks, state=3, details=True, tick_action=None, soc_a
         return {"changed": True, "state": 1}
 
     service._force_float, service._force_bulk = force_float, force_bulk
+    service.float_started_calls = []
+    service.float_started_callback = lambda: service.float_started_calls.append(current["n"])
     seen = []
 
     def hook(n):
@@ -171,6 +173,7 @@ def part2():
     s, writes, _, _ = run_loop(lambda n: (3550, "BATTERY 1"), 4, state=1)
     assert ("float", "charger_house") in writes and s.float_policy_status["soc_source"] == "daly_bms" and not s.float_policy_status["soc_held"]
     assert s.float_policy_status["trigger"] == "cell_voltage"
+    assert s.float_started_calls == [1], "Float starting for the first time must trigger the all-batteries-to-100% callback exactly once"
 
     # b) latched, then the cell reading goes stale while a source is charging again: Float is still forced, Bulk is not resumed
     def stale_after_three(n):
@@ -184,6 +187,7 @@ def part2():
     assert st["soc_source"] == "stale_hold" and st["soc_held"] and st["float_latched"] and st["active"], st
     assert ("float", "charger_house") in writes, "a source that restarts while the cell reading is unknown must be put back in Float"
     assert not [w for w in writes if w[0] == "bulk"], "Bulk must never be resumed on stale data"
+    assert s.float_started_calls == [1], "holding Float on a stale reading must not re-trigger the 100% callback"
 
     # c) latched, the cell reading returns cooled down: Bulk resumes on fresh data only
     def recover(n):
@@ -248,6 +252,21 @@ def part2():
     assert s.float_policy_status["float_latched"] and s.float_policy_status["trigger"] == "held", s.float_policy_status
     assert not [w for w in writes if w[0] == "bulk"], "must not resume while the cell reading that latched Float has gone stale"
     print("Cell-voltage trigger wired into the real loop: engages, blocks resume, holds on a stale cell reading: OK")
+
+    # k) the all-batteries-to-100% callback fires again on a fresh re-latch after a resume, but never while merely
+    # held or while already latched. Transitions through charging (1) -> confirmed Float (3) -> cooled, resumed ->
+    # charging again (1) -> hot again, mirroring what the hardware would actually report at each stage.
+    def start_resume_restart(n):
+        if n <= 2:return (3550, "BATTERY 1")        # Float starts
+        if n <= 5:return (3400, "BATTERY 1")         # cools down, Bulk resumes
+        return (3550, "BATTERY 1")                   # heats up again: a second, independent Float start
+    def stage_transitions(n, service, current):
+        if n == 2:current["state"] = 3               # hardware confirms Float, as commanded at n=1
+        elif n == 6:current["state"] = 1              # back to charging before the second trigger
+    s, writes, _, _ = run_loop(start_resume_restart, 8, state=1, tick_action=stage_transitions)
+    assert ("float", "charger_house") in writes and ("bulk", "charger_house") in writes
+    assert s.float_started_calls == [1, 6], "a resume followed by a fresh trigger must fire the 100% callback again, once per rising edge"
+    print("The all-batteries-to-100% callback fires once per fresh Float start, never on hold or while already latched: OK")
 
 
 def part3():

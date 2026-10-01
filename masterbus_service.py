@@ -32,6 +32,7 @@ class MasterBusService:
         self.mastershunt_config_maps={}
         self._load_mastershunt_config_maps()
         self.ac_support_enabled=None
+        self.active_mode=None  # last operating mode set from the Control panel (server-side, cleared by any individual device control); not persisted across a restart
         self.settings_file=Path(__file__).resolve().parent/"user_settings.json"
         self.settings={
             "default_ac_limit":15,
@@ -764,7 +765,8 @@ class MasterBusService:
             max_cell_mv=None if details is None else details.get("max_cell_mv")
             # A missing/stale cell reading (DALY link down) counts as unknown. While Float is latched that holds
             # the sources in Float (never resumes Bulk on old data); it never starts Float by itself.
-            active,resume,held,trigger=float_decision(enabled,self.float_policy_status.get("float_latched"),max_cell_mv,cell_trigger_mv,cell_resume_mv)
+            was_latched=self.float_policy_status.get("float_latched")
+            active,resume,held,trigger=float_decision(enabled,was_latched,max_cell_mv,cell_trigger_mv,cell_resume_mv)
             if held:soc_source="stale_hold"
             self.float_policy_status["enabled"]=enabled
             self.float_policy_status["cell_trigger_mv"]=cell_trigger_mv
@@ -802,6 +804,14 @@ class MasterBusService:
                     self.float_policy_status["float_latched"]=False
                 continue
             self.float_policy_status["float_latched"]=True
+            if not was_latched:
+                # Float protection just switched on (fresh cell-voltage trigger, never on "held"): the cells are
+                # at/above the trigger, i.e. effectively full, so bring every battery's reported SOC to 100% rather
+                # than let it sit on a stale coulomb-counted value until the next full discharge recalibrates it.
+                try:
+                    callback=getattr(self,"float_started_callback",None)
+                    if callable(callback):callback()
+                except Exception:pass
             now=time.monotonic()
             changed_any=False
             for name,addr,command_field,commit_field,_bulk_field,_bulk_commit,state_field in sources:
@@ -892,7 +902,12 @@ class MasterBusService:
             raise RuntimeError(
                 f"{mode.title()} mode partially applied; " + "; ".join(failures)
             )
+        self.active_mode=mode
         return {"mode":mode,"ok":True,"actions":results}
+
+    def clear_active_mode(self):
+        """An individual device was switched directly: no named mode is active any more."""
+        self.active_mode=None
 
     def _discover_map(self,addr,maxidx,role):
         schema=Discovery(self).schema(addr,maxidx)
@@ -1450,6 +1465,7 @@ class MasterBusService:
             },
             "discovery_status":self.discovery_status,
             "cache_items":len(self.cache),
+            "active_mode":self.active_mode,
             "controls":self.control_capabilities(),
             "usb":{
                 "product":(self.bus.device_info or {}).get("product_string"),

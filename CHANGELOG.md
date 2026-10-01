@@ -10,6 +10,20 @@ Unless an entry says otherwise, every release also bumps the application version
 
 ---
 
+## 1.18 — Mode memory, 24-hour clock, History chart fixes, BMS/Balance cleanup
+
+### 1.18.0
+- **Float protection reads cell voltage from the BMSes only** (confirmed and documented explicitly; the balancers' own cell readings, which exist for display only, were never part of the trigger). **Float now also sets every battery's SOC to 100%** the moment it starts: the triggering cell being at/above the Float voltage means the battery is effectively full, so this re-anchors the coulomb counter immediately instead of waiting for the next full discharge. Fires once per fresh Float start, never while merely held or already latched (`masterbus_service.enforce_high_soc_float`, new `float_started_callback` hook, `app.py`).
+- **Control panel: the last Motor/Anchor/Marina/Sail mode is remembered server-side** and its button stays highlighted, for every browser and after a page reload - not just in the browser that clicked it. Switching any device individually clears it (also server-side) so no mode button is shown active when the system no longer matches one. New `active_mode` field on `/api/energy`; `MasterBusService.clear_active_mode()` is called from every individual control route. Not persisted across a server restart, like the other live status fields.
+- **Set SOC pop-ups:** fixed the manual-entry field showing a doubled "%" and made it the same height as the Set button.
+- **The clock in the header (and "Updated …" on the BMS and Balance pages) is now 24-hour**, not AM/PM.
+- **Control panel:** the Shore Power tile is now the same height as the other Sources tiles. The Storage tiles' gauge shows "100%" in full again (the "%" was being dropped at 100).
+- **BMS page:** the Battery tiles' V/A/°C line no longer breaks across two lines on an iPhone. The table no longer repeats Voltage, Current, Temperature and Remaining, which are already in the tiles above it.
+- **Balance page:** removed the Alarms and Cycles rows (balancers don't alarm or cycle-count; these were always "None"/empty).
+- **History → Sources → Generated power:** the left (W) axis now steps in multiples of 250 W.
+- **History → Storage:** the Remaining chart's left axis is now in kWh instead of Ah (right axis % unchanged). The Charge/discharge chart now shows Watts on the left axis and Amps on the right (was Amps only).
+- **Fix: a short History selection (e.g. 4 hours) could render as disconnected, broken-looking bars.** The chart data behind the full selection is index-sampled across the whole retention period, which can leave an uneven, sparse slice for a short preset or zoom. A short-enough view (≤ 48 hours) now also quietly fetches that exact window at full resolution in the background and re-renders with it, without touching the broader data the Custom/Zoom sliders are built from.
+
 ## 1.17 — Float protection is cell-voltage only, manual SOC entry, gauge meters
 
 ### 1.17.0
