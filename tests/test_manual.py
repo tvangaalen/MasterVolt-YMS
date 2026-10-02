@@ -60,6 +60,9 @@ def main():
 
     page = client.get("/manual")
     assert page.status_code == 200 and "text/html" in page.headers["content-type"] and "Mastervolt Energy - Manual" in page.text
+    assert (
+        'id="back"' in page.text and "Back to the app" in page.text
+    ), "the manual needs a way back to the app (the iPhone app has no back button)"
     assert 'href="/manual"' in (PATHS.static / "index.html").read_text(encoding="utf-8"), "the Settings page must link to the manual"
     index = (PATHS.static / "index.html").read_text(encoding="utf-8")
     assert 'id="manualBtn"' in index and 'onclick="openManual()"' in index, "the Reports tab must have the Manual button"

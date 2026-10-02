@@ -12,6 +12,9 @@ Unless an entry says otherwise, every release also bumps the application version
 
 ## 2.0 — Professional restructure
 
+### 2.0.4
+- **The manual is no dead end on the iPhone.** In the installed app the manual opens inside the app window, which has no browser back button. The manual now has a sticky **← Back to the app** button at the top: it closes a pop-up window (desktop), otherwise goes back in the history, otherwise to the app's start page.
+
 ### 2.0.3
 - **History → Reports has a *Manual* button** that opens the user manual (`/manual`) in a separate window, so the History page keeps its place (a blocked pop-up falls back to a normal tab). The Settings page keeps its *Manual* link.
 

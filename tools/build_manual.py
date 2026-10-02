@@ -30,6 +30,8 @@ PAGE = """<!doctype html>
 :root{{--bg:#fff;--fg:#17212b;--muted:#5b6b7a;--line:#d7dee5;--code:#f1f4f7;--accent:#00666b;--quote:#eef7f7}}
 @media (prefers-color-scheme:dark){{:root{{--bg:#0b141b;--fg:#dbe5ec;--muted:#8fa3b3;--line:#233443;--code:#13222d;--accent:#4fd1d5;--quote:#10252b}}}}
 html{{scroll-behavior:smooth}}
+.back{{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:.6rem;padding:.55rem 1rem;padding-top:max(.55rem,env(safe-area-inset-top));background:var(--bg);border-bottom:1px solid var(--line)}}
+.back a{{display:inline-block;padding:.5rem .9rem;border:1px solid var(--accent);border-radius:8px;font-weight:700;text-decoration:none}}
 body{{margin:0;background:var(--bg);color:var(--fg);font:16px/1.6 system-ui,-apple-system,'Segoe UI',Roboto,sans-serif}}
 .wrap{{max-width:60rem;margin:0 auto;padding:1rem 1rem 4rem}}
 nav.toc{{border:1px solid var(--line);border-radius:10px;padding:.6rem 1rem;margin:1rem 0 2rem;background:var(--code)}}
@@ -51,7 +53,19 @@ hr{{border:0;border-top:1px solid var(--line);margin:2rem 0}}
 li{{margin:.2rem 0}}
 </style>
 </head>
-<body><div class="wrap">
+<body>
+<div class="back"><a id="back" href="/">&larr; Back to the app</a></div>
+<script>
+// In the installed phone app this page opens inside the app window, which has no browser back button: this one returns to the
+// app. A pop-up window (desktop) is simply closed; otherwise go back in the history, or to the app's start page.
+document.getElementById('back').addEventListener('click', function (event) {{
+  event.preventDefault();
+  if (window.opener) {{ window.close(); return; }}
+  if (history.length > 1) {{ history.back(); return; }}
+  location.href = '/';
+}});
+</script>
+<div class="wrap">
 {toc}
 {body}
 </div></body>
