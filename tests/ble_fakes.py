@@ -11,6 +11,7 @@ BEHAVIOUR = {}
 PRESENT = set()
 RSSI = {}  # per device name: advertised signal strength in dBm (default -60)
 SCAN_DELAY = 0.0  # seconds before a scan reports anything
+SCAN_CALLBACKS = True  # False: the detection callback never fires; devices are only in the scanner's collected results
 
 
 def frame(command, data):
@@ -141,12 +142,18 @@ class FakeScanner:
         if SCAN_DELAY:
             await asyncio.sleep(SCAN_DELAY)
         loop = asyncio.get_running_loop()
-        for name in sorted(PRESENT):
-            loop.call_later(0.005, self.callback, Device(name), Advertisement(name))
+        if SCAN_CALLBACKS:
+            for name in sorted(PRESENT):
+                loop.call_later(0.005, self.callback, Device(name), Advertisement(name))
         return self
 
     async def __aexit__(self, *exc):
         COUNT[("scanner", "stopped")] += 1
+
+    @property
+    def discovered_devices_and_advertisement_data(self):
+        """What the scanner has collected so far (also when the detection callback never fired)."""
+        return {name: (Device(name), Advertisement(name)) for name in PRESENT}
 
     @staticmethod
     async def discover(timeout=5, return_adv=False):

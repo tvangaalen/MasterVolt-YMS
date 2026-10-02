@@ -8,6 +8,7 @@ import bleak
 
 from mastervolt.bluetooth import link
 from mastervolt.bluetooth.daly_protocol import BALANCER_NAMES, FrameAssembler, status_request
+from tests import ble_fakes
 from tests.ble_fakes import COUNT, PRESENT, RSSI, FakeScanner, wait
 
 
@@ -85,6 +86,13 @@ def scanner_checks():
     found, signal, took = asyncio.run(scan(["DL-BAL1"], 0.3))
     assert found == {} and 0.25 <= took < 1.5, "a device that is not there ends the scan at the time-out, not before"
     assert "DL-BAL3" in signal, "the signal of devices that were not looked for is still recorded"
+    # a scanner whose detection callback never fires still delivers through the results it collected (as a plain timed scan did)
+    ble_fakes.SCAN_CALLBACKS = False
+    PRESENT.clear()
+    PRESENT.update(BALANCER_NAMES)
+    found, signal, took = asyncio.run(scan(["DL-BAL1", "DL-BAL2"], 0.3))
+    assert set(found) == {"DL-BAL1", "DL-BAL2"} and "DL-BAL3" in signal, (found, signal)
+    ble_fakes.SCAN_CALLBACKS = True
     RSSI.clear()
 
 

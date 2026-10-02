@@ -243,9 +243,13 @@ async def scan_for(wanted: list[str], known: tuple[str, ...], timeout: float):
         if all(name in found for name in wanted):
             done.set()
 
-    async with BleakScanner(detection_callback=on_advertisement):
+    scanner = BleakScanner(detection_callback=on_advertisement)
+    async with scanner:
         try:
             await asyncio.wait_for(done.wait(), timeout=timeout)
         except TimeoutError:
             pass
+        # Parity with a plain timed scan: whatever the scanner has collected by now counts, whether or not the callback reported it.
+        for device, advertisement in getattr(scanner, "discovered_devices_and_advertisement_data", {}).values():
+            on_advertisement(device, advertisement)
     return found, signal

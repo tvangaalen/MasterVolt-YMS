@@ -12,6 +12,10 @@ Unless an entry says otherwise, every release also bumps the application version
 
 ## 2.0 — Professional restructure
 
+### 2.0.1
+- **Balancer scans also read the scanner's collected results.** 2.0.0 ends a scan as soon as the wanted balancers have been seen (a detection callback); at the time-out it now also consults what the scanner has collected, exactly as the former fixed-length scan did, so a device whose advertisement was collected but not reported to the callback is never missed. Covered by a test with a scanner whose callback never fires.
+- Prettier accepts either line-ending style (a Windows checkout writes CRLF).
+
 ### 2.0.0
 
 A ground-up reorganisation of the code, **with the hardware behaviour of 1.22.2 reproduced exactly** (proved by golden tests, below),
