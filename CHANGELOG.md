@@ -10,6 +10,14 @@ Unless an entry says otherwise, every release also bumps the application version
 
 ---
 
+## 1.21 — Battery tile layout, separate BMS/BAL refresh
+
+### 1.21.0
+- **BMS Battery tiles:** V/A/°C and Ah remaining are back directly under the SOC gauge; the cell graphic comes below them.
+- **Cell graphic redrawn as deviation bars.** A horizontal line stands for the **balancer's average voltage** and its value is printed at the line's left. Every cell is a bar growing up (above the average) or down (below it) from that line, scaled to at least +/-20 mV. The bars are the BMS cell voltages, so when the BMS and the balancer disagree by a few tens of mV all bars sit on one side of the line - that is the instrument offset made visible (without a fresh balancer reading the BMS's own average is used and its value is dimmed). Colours: lowest cell **blue**, highest **red** (as the dots in the table), the rest **green**; a cell at or above the Float cell trigger **blinks bright red**. Cells being balanced keep the pulsing yellow outline and the lightning mark above the bar; the line below now reads just *cell 3 · 1.1 A* (no lightning mark).
+- **BMS table:** *Alarms* and *Cycles* moved up into STATUS, above *SOC - Charging*; the section with the Charge/Discharge buttons is now called **CONTROL** (it was SYSTEM).
+- **Refresh all** on the BMS page is split into **Refresh BMS** and **Refresh BAL** (the latter is the Balance page's Refresh all). The status text under the title now has one line per source (*BMS updated hh:mm:ss · every 30s*, *BAL updated ...*).
+
 ## 1.20 — Battery and balancer integrated on the BMS page
 
 ### 1.20.0
