@@ -45,6 +45,7 @@ Delete `__pycache__` folders after running Python here; the project lives in Goo
 
 ## Conventions
 
+- **Never edit source files with PowerShell `Get-Content`/`Set-Content`** (Windows PowerShell 5.1 reads UTF-8 as the ANSI code page and writes a BOM: every "–", "·", "—" became "â€“" etc. in a version bump once). Use the Edit tool, or a Python script that reads and writes bytes as UTF-8, and check `git diff --stat` shows only the intended lines afterwards.
 - Python 3.12+, Windows, PowerShell. `py` launcher, not `python`. Paths must not be hardcoded (`$PSScriptRoot`, `Path(__file__)`).
 - Match the surrounding style. `app.py` and the service modules use a dense style (semicolons, terse names) — don't reformat existing code.
 - **iPhone touch rules for the frontend.** The pages switch on a horizontal swipe (handler near the end of `index.html`). Any control that is dragged or scrolled sideways (sliders, scrollable tables, carousels) must be an `input`/`select`/`textarea` or sit inside an element with class `no-swipe`, otherwise dragging it changes page. Touch targets should be at least ~40 px. The browser preview cannot drag range inputs in its mobile emulation (it sends mouse events); check them at desktop width and test the swipe guard with dispatched `TouchEvent`s.

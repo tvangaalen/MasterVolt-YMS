@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import json
 import math
+import os
+import shutil
 import sqlite3
 import threading
+import time
 from bisect import bisect_left
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -44,6 +47,44 @@ class HistoryService:
 
     def count(self):
         with self.lock,self._connect() as db:return db.execute("SELECT COUNT(*) FROM measurements").fetchone()[0]
+
+    def db_status(self,retention_days:int,max_age:float=60.0):
+        """Database size and record statistics for the Settings page.
+
+        Cached for `max_age` seconds, and read on its own connection (WAL allows it) instead of under self.lock, so
+        opening Settings can never stall recording or the chart cache. Everything is answered from the (source, id)
+        index - COUNT per source, and first/last row per source by id - never a scan of the payload rows, which
+        would read the whole (about 1 GB) file."""
+        now=time.monotonic();cached=getattr(self,"_status_cache",None)
+        if cached and now-cached[0]<max_age and cached[2]==retention_days:return cached[1]
+        db=sqlite3.connect(self.path,timeout=10)
+        try:
+            counts=dict(db.execute("SELECT source,COUNT(*) FROM measurements GROUP BY source").fetchall())
+            first=[];last=[]
+            for source in counts:
+                first.append(db.execute("SELECT captured_at FROM measurements WHERE source=? ORDER BY id LIMIT 1",(source,)).fetchone()[0])
+                last.append(db.execute("SELECT captured_at FROM measurements WHERE source=? ORDER BY id DESC LIMIT 1",(source,)).fetchone()[0])
+            page_size=db.execute("PRAGMA page_size").fetchone()[0];page_count=db.execute("PRAGMA page_count").fetchone()[0];free_pages=db.execute("PRAGMA freelist_count").fetchone()[0]
+        finally:
+            db.close()
+        size=os.path.getsize(self.path);wal=os.path.getsize(str(self.path)+"-wal") if os.path.exists(str(self.path)+"-wal") else 0
+        oldest=min(first) if first else None;newest=max(last) if last else None
+        span_days=None
+        if oldest and newest:
+            try:span_days=(datetime.fromisoformat(newest)-datetime.fromisoformat(oldest)).total_seconds()/86400
+            except ValueError:pass
+        records=sum(counts.values());per_day=records/span_days if span_days and span_days>=0.5 else None
+        bytes_per_day=(page_count-free_pages)*page_size/span_days if span_days and span_days>=0.5 else None
+        status={
+            "file":self.path.name,"size_bytes":size,"wal_bytes":wal,"reusable_bytes":free_pages*page_size,
+            "disk_free_bytes":shutil.disk_usage(self.path.parent).free,
+            "records":records,"by_source":counts,"oldest":oldest,"newest":newest,"span_days":span_days,
+            "retention_days":retention_days,"records_per_day":per_day,
+            "projected_bytes_at_retention":bytes_per_day*retention_days if bytes_per_day else None,
+            "chart_cache":{"bms":len(self._bms_chart_cache or ()),"dashboard":len(self._dashboard_chart_cache or ())},
+        }
+        self._status_cache=(now,status,retention_days)
+        return status
 
     def bms_series(self,after_id:int=0):
         """Return compact, chronological BMS samples for incremental chart updates."""

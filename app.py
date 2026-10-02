@@ -162,7 +162,7 @@ async def lifespan(app):
     try: await asyncio.to_thread(balancer_service.stop)
     except: pass
 
-app=FastAPI(title="Mastervolt Energy",version="1.18.1",lifespan=lifespan)
+app=FastAPI(title="Mastervolt Energy",version="1.19.0",lifespan=lifespan)
 app.add_middleware(GZipMiddleware,minimum_size=1000)
 app.mount("/static",StaticFiles(directory=STATIC),name="static")
 
@@ -237,6 +237,9 @@ def bluetooth_status():return bluetooth_coordinator.snapshot()
 
 @app.get("/api/bluetooth-events")
 def bluetooth_events(limit:int=100):return ble_log.snapshot(limit)
+
+@app.get("/api/history/status")
+def history_status():return history_service.db_status(service.get_settings()["history_retention_days"])
 
 @app.get("/api/history")
 def history(limit:int=100):return {"count":history_service.count(),"retention_days":service.get_settings()["history_retention_days"],"records":history_service.latest(limit)}

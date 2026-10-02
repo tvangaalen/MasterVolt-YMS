@@ -10,6 +10,15 @@ Unless an entry says otherwise, every release also bumps the application version
 
 ---
 
+## 1.19 — BMS/Balance layout, History swipe, database status
+
+### 1.19.0
+- **BMS page:** the *Set SOC* buttons (and *Set all SOC*) moved from the bottom action rows into the table's STATUS section, directly under *SOC - Discharging*; Charge/Discharge (and the *All* variants) stay at the bottom.
+- **BMS page:** the Balancer table from the Balance page is now also shown under the BMS table, aligned so Balancer 1 sits in Battery 1's column, and so on (clicking a balancer's header refreshes just that balancer, as on the Balance page).
+- **Balance page:** removed the *Frames* row.
+- **History:** swiping left/right now moves between the History tabs (Sources, Storage, Loads, Alarms, Reports); at either end it continues to the neighbouring page (Balance / Settings), as before.
+- **Settings → Save history period:** now shows the database status - size (plus the write-ahead log), number of records in total and per source, oldest/newest record, stored period against the retention setting, growth per day, expected size at the full retention period, reusable space inside the file, the in-memory chart cache and the free disk space. New read-only `GET /api/history/status`: answered from the `(source, id)` index on its own connection (never under the history lock), cached for 60 s, about 0.1 s on the live ~1 GB database.
+
 ## 1.18 — Mode memory, 24-hour clock, History chart fixes, BMS/Balance cleanup
 
 ### 1.18.1

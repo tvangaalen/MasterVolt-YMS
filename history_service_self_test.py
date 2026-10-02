@@ -208,7 +208,35 @@ def refresh_chart_cache_trim_test():
         print("refresh_chart_cache() skips the trim rebuild when nothing was pruned: OK")
 
 
+def db_status_test():
+    """db_status() (Settings page): totals, per-source counts, oldest/newest, sizes, and a short-lived cache."""
+    with tempfile.TemporaryDirectory(prefix="hist status ") as tmp:
+        history = HistoryService(Path(tmp) / "history.sqlite3")
+        empty = history.db_status(31, max_age=0)
+        assert empty["records"] == 0 and empty["oldest"] is None and empty["span_days"] is None and empty["by_source"] == {}
+        now = datetime.now(timezone.utc)
+        for day in range(3):
+            stamp = (now - timedelta(days=2 - day)).isoformat()
+            history.record("dashboard", {"x": day}, captured_at=stamp)
+            history.record("bms", {"x": day}, device="BATTERY 1", captured_at=stamp)
+        history.record("bms", {"x": 9}, device="BATTERY 2", captured_at=now.isoformat())
+        status = history.db_status(31, max_age=0)
+        assert status["records"] == 7 and status["by_source"] == {"dashboard": 3, "bms": 4}, status
+        assert status["oldest"] == (now - timedelta(days=2)).isoformat() and status["newest"] == now.isoformat()
+        assert abs(status["span_days"] - 2) < 1e-6 and status["retention_days"] == 31
+        assert status["size_bytes"] > 0 and status["disk_free_bytes"] > 0 and status["records_per_day"] == 3.5
+        assert status["projected_bytes_at_retention"] is None or status["projected_bytes_at_retention"] > 0
+        assert status["chart_cache"] == {"bms": 0, "dashboard": 0}
+        history.record("dashboard", {"x": 10})
+        cached = history.db_status(31, max_age=3600)
+        assert cached["records"] == 7, "within max_age the earlier result is served, not a fresh count"
+        assert history.db_status(31, max_age=3600) is cached, "a second call within max_age must return the cached status"
+        assert history.db_status(31, max_age=0)["records"] == 8, "max_age=0 must re-read the database"
+    print("db_status(): totals, per-source counts, oldest/newest, sizes and caching: OK")
+
+
 if __name__ == "__main__":
     main()
     chart_data_test()
     refresh_chart_cache_trim_test()
+    db_status_test()

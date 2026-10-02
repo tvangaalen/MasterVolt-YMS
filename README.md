@@ -1,6 +1,6 @@
 # MasterVolt YMS
 
-**Mastervolt Energy v1.18.1** — a private web app (installable iPhone PWA) that monitors and controls a boat's
+**Mastervolt Energy v1.19.0** — a private web app (installable iPhone PWA) that monitors and controls a boat's
 Mastervolt electrical system and its DALY battery management, from a Windows PC on the boat's LAN.
 
 - **MasterBus** over the Mastervolt USB Link: CombiMaster (shore power, inverter, charger), Solar ChargeMaster,
@@ -15,12 +15,12 @@ Release history: [CHANGELOG.md](CHANGELOG.md). Protocol findings and field maps:
 | Page | What it does |
 |---|---|
 | **Control panel** | Sources, Storage and Loads tiles with live V/A/W and the same arc-gauge SOC meter as the BMS page; ON/OFF controls; Motor / Anchor / Sail / Marina modes (the last one applied is remembered server-side and shown highlighted; switching any device individually clears it, for every browser); shore-power AC limit; `INV` and `SUP`; Engine ECU power with a safety confirmation |
-| **BMS** | Side-by-side House battery matrix: SOC, voltages (3 decimals), cell voltages, temperatures, alarms, MOS state, voltage-derived SOC; Charge/Discharge controls and Set SOC (per battery and all) — a curve-based value, 100%, or a manual percentage; tap a battery's column title or tile to refresh just that battery |
+| **BMS** | Side-by-side House battery matrix: SOC, voltages (3 decimals), cell voltages, temperatures, alarms, MOS state, voltage-derived SOC; Charge/Discharge controls and Set SOC (per battery and all) — a curve-based value, 100%, or a manual percentage; tap a battery's column title or tile to refresh just that battery; the balancer table is repeated underneath (Balancer n in Battery n's column) |
 | **Balance** | Same layout for the three balancers (tap a balancer's column title to refresh only that balancer), plus collapsed raw Bluetooth diagnostics |
 | **History** | Charts for Sources, Storage, Loads and Alarms (stacked areas with a smooth total line), served from a server-side cache, with touch-friendly time-range buttons (4 h … All), a Custom From/To range and a Zoom that narrows the selected period further, whole-hour/whole-day time axes, and a donut chart per tab with the totals over the selected period (source contribution, battery contribution, total per consumer, alarms per battery); a **Reports** tab with the battery health report (asks for the number of days, runs it on the server, shows the result) |
-| **Settings** | Default AC limit, Float protection thresholds, refresh/retry intervals, pop-up durations, history retention |
+| **Settings** | Default AC limit, Float protection thresholds, refresh/retry intervals, pop-up durations, history retention with the database status (size, records per source, oldest/newest, growth, expected size) |
 
-Swipe left/right moves between pages on touch devices. A Light UI (for sunlight) and Dark UI are available from the header.
+Swipe left/right moves between pages on touch devices (on History, between its tabs first). A Light UI (for sunlight) and Dark UI are available from the header.
 
 ## Requirements
 
