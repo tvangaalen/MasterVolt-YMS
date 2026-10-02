@@ -45,6 +45,7 @@ class _Query:
                     for frame in self.io.bus.read_frames(self.READ_MS):
                         if predicate(frame):
                             return frame
+            time.sleep(0.01)  # let the poller in between two attempts (the lock is not fair)
         return None
 
     def _string(self, addr, string_id):

@@ -12,6 +12,9 @@ Unless an entry says otherwise, every release also bumps the application version
 
 ## 2.0 — Professional restructure
 
+### 2.0.2
+- **The dashboard no longer goes blank for the first minute after a start.** At every start the MasterShunt configuration discovery (a long read-only conversation: about two metadata requests per field, each waiting up to 0.3 s three times when a field does not exist) held the bus lock so persistently that the poller was starved and the values of the first minute expired to "-". The discovered field numbers only change with the device firmware, so the result in `mastershunt_config_maps.json` is now trusted for 30 days (discovery runs when the file is missing, empty or older, and `force` exists for tools); when it does run it lets the poller in between two attempts. Behaviour of the discovery itself is unchanged.
+
 ### 2.0.1
 - **Balancer scans also read the scanner's collected results.** 2.0.0 ends a scan as soon as the wanted balancers have been seen (a detection callback); at the time-out it now also consults what the scanner has collected, exactly as the former fixed-length scan did, so a device whose advertisement was collected but not reported to the callback is never missed. Covered by a test with a scanner whose callback never fires.
 - Prettier accepts either line-ending style (a Windows checkout writes CRLF).

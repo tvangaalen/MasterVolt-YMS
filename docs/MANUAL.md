@@ -1,6 +1,6 @@
 # Mastervolt Energy - Manual
 
-**Version 2.0.1** - the complete guide to using, operating and maintaining the application. It explains what every screen
+**Version 2.0.2** - the complete guide to using, operating and maintaining the application. It explains what every screen
 shows, how every number is obtained, what the application does on its own (Float protection, Bluetooth recovery, history),
 which files it keeps, what to do when something goes wrong, and how the code is organised for whoever changes it next.
 
@@ -312,7 +312,7 @@ One Python process (Uvicorn serving a FastAPI application) runs these long-lived
 | BMS workers | `daly-battery-1`..`3` (+ monitors) | each keeps its battery's Bluetooth link open and reads it periodically |
 | Balancer worker | `daly-balancers` (+ monitor) | reads the three balancers one at a time |
 | History recorder | `measurement-history` | stores samples, prunes, keeps the chart cache current |
-| Shunt discovery | `mastershunt-config` | once at start: finds the battery type/capacity fields by name |
+| Shunt discovery | `mastershunt-config` | finds the battery type/capacity fields by name; skipped at start while the saved result (`mastershunt_config_maps.json`) is under 30 days old |
 | Web requests | Uvicorn's worker threads | answer the browser from the caches; carry out commands |
 
 The code lives in the `mastervolt` package: `masterbus` (USB protocol, I/O, controls, energy model, Float protection),

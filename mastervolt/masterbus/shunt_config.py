@@ -8,7 +8,9 @@ background at start-up). Until a field and a usable value are known, the dashboa
 from __future__ import annotations
 
 import json
+import logging
 import threading
+import time
 from pathlib import Path
 
 from .discovery import ControlDiscovery, Discovery
@@ -18,6 +20,10 @@ TYPE_NAMES = {"battery type", "battery technology", "battery chemistry"}
 CAPACITY_NAMES = {"battery capacity", "nominal capacity", "installed capacity", "bank capacity", "capacity"}
 SHUNTS = {"house": HOUSE_SHUNT, "start": START_SHUNT, "bow": BOW_SHUNT}
 _ALLOWED_LABEL_CHARACTERS = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 +-/().")
+
+
+log = logging.getLogger("mastervolt.masterbus")
+MAX_AGE_SECONDS = 30 * 86400  # the discovered field numbers belong to the device firmware: found once, trusted for a month
 
 
 def clean_battery_type(label) -> str | None:
@@ -82,8 +88,22 @@ class MasterShuntConfig:
             "config_discovered": bool(battery_type or capacity is not None),
         }
 
-    def discover(self, stop: threading.Event) -> None:
-        """Find the type/capacity fields by name (read-only; takes a while on the bus) and remember them."""
+    def is_fresh(self) -> bool:
+        """True when a non-empty discovery result was saved less than 30 days ago."""
+        try:
+            return bool(self.maps) and time.time() - self.path.stat().st_mtime < MAX_AGE_SECONDS
+        except OSError:
+            return False
+
+    def discover(self, stop: threading.Event, force: bool = False) -> None:
+        """Find the type/capacity fields by name (read-only) and remember them.
+
+        This is a long conversation with the devices (about a minute) that competes with the poller for the bus: with the
+        poller starved, the dashboard went blank for the first minute after every start. The result only changes with the
+        device firmware, so it is repeated at most monthly (or with `force`)."""
+        if not force and self.is_fresh():
+            log.info("MasterShunt configuration found earlier is still current; skipping discovery")
+            return
         discovery, options = Discovery(self.io), ControlDiscovery(self.io)
         found = {}
         for key, addr in SHUNTS.items():
