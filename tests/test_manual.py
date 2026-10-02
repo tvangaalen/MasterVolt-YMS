@@ -61,7 +61,10 @@ def main():
     page = client.get("/manual")
     assert page.status_code == 200 and "text/html" in page.headers["content-type"] and "Mastervolt Energy - Manual" in page.text
     assert 'href="/manual"' in (PATHS.static / "index.html").read_text(encoding="utf-8"), "the Settings page must link to the manual"
-    print("GET /manual serves the manual and the Settings page links to it: OK")
+    index = (PATHS.static / "index.html").read_text(encoding="utf-8")
+    assert 'id="manualBtn"' in index and 'onclick="openManual()"' in index, "the Reports tab must have the Manual button"
+    assert "function openManual()" in (PATHS.static / "js" / "reports.js").read_text(encoding="utf-8")
+    print("GET /manual serves the manual; the Settings page links to it and the Reports tab has a Manual button: OK")
 
 
 if __name__ == "__main__":

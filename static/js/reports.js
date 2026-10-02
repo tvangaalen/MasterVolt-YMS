@@ -188,3 +188,9 @@ $('reportDays').addEventListener('keydown', event => {
 $('reportDialog').addEventListener('click', event => {
   if (event.target === $('reportDialog')) closeReportDialog();
 });
+// The manual (GET /manual, built from docs/MANUAL.md) opens in a window of its own so the History page keeps its place.
+function openManual() {
+  const popup = window.open('/manual', 'mastervoltManual', 'popup,width=960,height=900');
+  if (popup) popup.focus();
+  else window.open('/manual', '_blank'); // a blocked pop-up falls back to a normal tab
+}

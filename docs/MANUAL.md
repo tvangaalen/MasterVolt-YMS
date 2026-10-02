@@ -1,6 +1,6 @@
 # Mastervolt Energy - Manual
 
-**Version 2.0.2** - the complete guide to using, operating and maintaining the application. It explains what every screen
+**Version 2.0.3** - the complete guide to using, operating and maintaining the application. It explains what every screen
 shows, how every number is obtained, what the application does on its own (Float protection, Bluetooth recovery, history),
 which files it keeps, what to do when something goes wrong, and how the code is organised for whoever changes it next.
 
@@ -265,7 +265,7 @@ fetched at full resolution as soon as it is selected, so nothing is missing from
 | **Storage** | *Remaining* energy (kWh), *Charge/discharge* (watts on the left axis, amps on the right), per-battery *Voltage* and *Cell voltages* with a selectable battery | energy in and out of each battery |
 | **Loads** | *Consumption*, stacked per consumer with a total line (watts and amps) and the AC loads | energy per consumer |
 | **Alarms** | a timeline of every BMS alarm and MOSFET change, with per-battery metrics | alarm episodes and samples per battery |
-| **Reports** | the **battery health report** | - |
+| **Reports** | the **battery health report**, and a **Manual** button that opens this manual in a separate window | - |
 
 Tapping a name in a chart legend highlights that series. The donuts show the **exact totals from the full-resolution
 history**, not the sampled chart data; the line under a donut says how much of the period was actually recorded (a gap while

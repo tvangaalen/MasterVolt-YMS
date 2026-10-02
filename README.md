@@ -1,6 +1,6 @@
 # MasterVolt YMS
 
-**Mastervolt Energy v2.0.2** — a private web app (installable iPhone PWA) that monitors and controls a boat's
+**Mastervolt Energy v2.0.3** — a private web app (installable iPhone PWA) that monitors and controls a boat's
 Mastervolt electrical system and its DALY battery management, from a Windows PC on the boat's LAN.
 
 - **MasterBus** over the Mastervolt USB Link: CombiMaster (shore power, inverter, charger), Solar ChargeMaster,
