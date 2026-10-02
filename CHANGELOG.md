@@ -10,6 +10,13 @@ Unless an entry says otherwise, every release also bumps the application version
 
 ---
 
+## 1.22 — Balance page removed
+
+### 1.22.0
+- **The Balance page is removed** (bottom tab, page, its polling and the raw Bluetooth diagnostics view). Everything that mattered is on the BMS page since 1.20: the balancer state per column, the BALANCING section, the balancer readings under the BMS cells, the cell bars in the tiles, and **Refresh BAL**. The balancers themselves are unchanged: still read over Bluetooth, still logged to `bluetooth.log` and available as `GET /api/balancers`, `GET /api/bluetooth-events` and the refresh routes; the Balancer refresh interval and retry stay in Settings. Swiping now runs Control panel ↔ BMS ↔ History ↔ Settings.
+- **BMS Battery tiles:** *Ah remaining* is gone from the tile. The balancer chart now prints the unit on the average voltage at the left of the line (`3.347 V`) and the **Max difference** at its right (`21 mV`, the balancer's own figure while it is fresh, otherwise max - min of the BMS cells).
+- **BMS table:** STATUS now starts with **Ah remaining** and, directly under it, **kWh remaining** (Ah x 13.2 V nominal bank voltage, the same figure the History *Remaining* chart uses), above Alarms and Cycles.
+
 ## 1.21 — Battery tile layout, separate BMS/BAL refresh
 
 ### 1.21.1
