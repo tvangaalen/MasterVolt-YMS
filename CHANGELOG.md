@@ -12,6 +12,10 @@ Unless an entry says otherwise, every release also bumps the application version
 
 ## 1.22 — Balance page removed
 
+### 1.22.2
+- **History - Source conditions:** the vertical axes of the Shore Power AC voltage, Solar panel voltage and Alternator temperature charts now start at **0** (0 V, 0 V, 0 °C) with round tick steps, instead of at a padded negative minimum (the dips to zero when a source drops out used to draw the axis down to -28 V / -17 V / -3 °C).
+- **History opens on 4 h:** every History page now starts with the **4 h** range selected (it used to open on the full history). The other presets, Zoom and Custom work as before.
+
 ### 1.22.1
 - **Balancer worker could die silently; Refresh BAL then stayed greyed out for ever.** Live on 2 Oct 2026 the balancer thread stopped at 14:46 (no log line, no error state) and the three balancers went stale ("N min old") while the BMS carried on. The Bluetooth libraries can end `connect()` with an `asyncio.CancelledError`, which is not an `Exception`: it slipped past the per-balancer and supervisor handlers, ended the thread, and with it the in-loop watchdog. A pending *Refresh BAL* generation could then never complete, and the button (disabled while a refresh is pending) stayed grey although nobody had clicked it just now. Fixed in three layers: a `CancelledError` during connect/read/scan is now an ordinary failed attempt (retried with the usual back-off); the supervisor also restarts the worker after one; and a new **monitor thread** replaces a worker thread that has died or whose event loop made no progress for 5 minutes (`worker_dead` / `worker_hung` in `bluetooth.log`, `worker_restarts` and `worker_alive` in `GET /api/balancers`). The balancer self-test now simulates all three failures (it fails on 1.22.0). Hardware-verified read sequences, timings and the Bluetooth priority order are unchanged.
 
