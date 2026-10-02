@@ -12,6 +12,9 @@ Unless an entry says otherwise, every release also bumps the application version
 
 ## 1.21 — Battery tile layout, separate BMS/BAL refresh
 
+### 1.21.1
+- **Battery tile cell bars: one instrument compared with itself.** 1.21.0 drew the BMS cell voltages around the *balancer's* average, so when the two instruments differ (live: Balancer 2 reads 12-17 mV below BMS 2 on every cell) all bars could land on one side of the line. The bars are now the **balancer's own cell voltages** around the balancer's own average, so there is always at least one bar below and one above. Lowest blue, highest red, the rest green, as before. A bar still blinks bright red when the **BMS** reading of that same cell is at or above the Float cell trigger (Float protection stays on the BMS only). Without a fresh balancer reading the tile falls back to the BMS cells and the BMS average (value dimmed). The bar tooltips say which instrument they come from. The BMS table and its dots are unchanged.
+
 ### 1.21.0
 - **BMS Battery tiles:** V/A/°C and Ah remaining are back directly under the SOC gauge; the cell graphic comes below them.
 - **Cell graphic redrawn as deviation bars.** A horizontal line stands for the **balancer's average voltage** and its value is printed at the line's left. Every cell is a bar growing up (above the average) or down (below it) from that line, scaled to at least +/-20 mV. The bars are the BMS cell voltages, so when the BMS and the balancer disagree by a few tens of mV all bars sit on one side of the line - that is the instrument offset made visible (without a fresh balancer reading the BMS's own average is used and its value is dimmed). Colours: lowest cell **blue**, highest **red** (as the dots in the table), the rest **green**; a cell at or above the Float cell trigger **blinks bright red**. Cells being balanced keep the pulsing yellow outline and the lightning mark above the bar; the line below now reads just *cell 3 · 1.1 A* (no lightning mark).
