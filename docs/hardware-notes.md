@@ -5,7 +5,7 @@ measurement map is in [`../VERIFIED_FIELD_MAP.txt`](../VERIFIED_FIELD_MAP.txt) (
 what changed afterwards and why. See [`../CHANGELOG.md`](../CHANGELOG.md) for the release history.
 
 > **Rule of thumb:** MasterBus field numbers are never guessed. A field is used only after it was verified against
-> live hardware, a device snapshot (`masterbus_snapshot.py`) or a MasterAdjust capture. The discovery code exists for
+> live hardware, a device snapshot (`py -m tools.inspect_device snapshot`) or a MasterAdjust capture. The discovery code exists for
 > diagnostics and is not run at normal start-up.
 
 ## Where the VERIFIED_FIELD_MAP.txt differs from the current code
@@ -62,7 +62,7 @@ MasterAdjust also continuously reads fields 38–41 and 43. No commit write was 
 runtime power command.
 
 An earlier start-up routine re-discovered field 56 and overwrote this mapping in the web server (fixed in v0.15.1),
-which is why `show_control_maps.py` should always be checked before starting:
+which is why the mappings should always be checked before starting (`py -m tools.show_fields`):
 
 ```text
 engine_ecu  verified True   address 3AE394   field 43   name "Mac/Magic On"   protocol btm1   type bool   commit_field None
@@ -126,14 +126,14 @@ around 3550-3600 mV; a normal full-charge cell sits around 3360-3390 mV), while 
 cell voltage. No DALY alarm-threshold registers are read or changed; 3500 mV is the app's own, independently-chosen
 figure.
 
-Only *fresh* cell readings count (`house_soc.py`, `cell_voltage_stats()`): each battery's reading must be younger
+Only *fresh* cell readings count (`mastervolt/soc.py`, `cell_voltage_stats()`): each battery's reading must be younger
 than max(120 s, 4 x the BMS refresh interval); if none is fresh, the highest cell voltage is unknown. While Float is
 latched and the cell reading is unknown the policy *holds*: sources that (re)start charging are still forced to
 Float, and Bulk is never resumed on old data (`soc_source` = `stale_hold`, `max_cell_mv`, `max_cell_battery`). An
 unknown cell voltage never starts Float protection by itself. The **cell spread** (worst cell-to-cell difference
 within a battery, `max_spread_mv`/`max_spread_battery`) is reported for the same reason but is deliberately
 informational only - not wired into the trigger, so a brief, harmless imbalance mid-charge cannot stall normal Bulk
-charging. The DALY-average House SOC (`house_soc()`) is still computed and shown on the Control panel and in
+charging. The DALY-average House SOC (`soc.house_soc()`) is still computed and shown on the Control panel and in
 `/api/energy` for information (`soc_fresh_batteries`, `soc_age_seconds`, `last_known_soc`), but no longer affects
 Float protection at all. There is deliberately no MasterShunt fallback (see above).
 
@@ -147,25 +147,21 @@ Float protection at all. There is deliberately no MasterShunt fallback (see abov
 
 ## Utility scripts
 
-All are run from the project folder with `py <script>`. Scripts marked **writes** change device state and require an explicit confirmation flag.
+Tools run from the project folder as `py -m tools.<name>` (the web server must be stopped first: it holds the USB Link and the
+Bluetooth radio). Tools marked **writes** change device state and require an explicit confirmation flag. The tests are listed in
+[`MANUAL.md`](MANUAL.md#92-tests).
 
-| Script | Purpose |
+| Tool | Purpose |
 |---|---|
-| `self_check.py` | Structural regression check of `MasterBusService` / `ControlDiscovery` (no hardware) |
-| `bms_control_self_test.py`, `bluetooth_connection_self_test.py` | Non-hardware checks of DALY MOS control and failure-isolated workers |
-| `bluetooth_coordinator_self_test.py`, `daly_bms_worker_self_test.py`, `daly_balancer_self_test.py` (with `ble_fakes.py`, a simulated `bleak`) | Non-hardware checks of the coordinator, the BMS monitoring workers and the balancer service: hung connects, lost requests, incomplete statuses, back-off, watchdog, degraded mode |
-| `ble_events_self_test.py` | Non-hardware check of the Bluetooth event log and its timing statistics |
-| `float_freshness_self_test.py` | Non-hardware check of the House-SOC age check and the real Float-protection loop with stubbed hardware access |
-| `battery_health.py` | Read-only battery health report from the stored history (verdict per battery, cell resistance, current sharing, alarms, balancers); `--split` compares before/after a change; also available in the app under History → Reports. Self-tests: `battery_health_self_test.py`, `report_service_self_test.py` |
-| `show_control_maps.py` | Print the active control mappings (check `engine_ecu` before starting) |
-| `field_audit.py` | Print every field number the app currently uses, including persisted `device_maps.json` |
-| `masterbus_snapshot.py --device <addr> --all-fields` | Read-only field snapshot of a device (uses the known `max_index`; `--max-index N` overrides) |
-| `masterbus_monitor.py`, `masterbus_discover.py`, `masterbus_capture.py`, `masterbus_cache_schemas.py` | Bus monitoring, discovery and schema caching |
-| `control_inspect.py`, `control_probe.py` | Read-only inspection of control fields |
-| `source_control_verify.py` | Read-only inspection of Solar/Alpha Pro writable fields; reversible Solar field-12 test with `--confirm-write` |
-| `charger_control_test.py` | **writes** – controlled Mass Charger On/Standby test |
-| `ecu_field43_test.py --confirm-write` | **writes** – reversible ECU power test on the verified field 43 |
-| `ecu_control_test.py`, `ecu_commit_test.py`, `ecu_dropdown_probe.py`, `ecu_power_probe.py` | Historical ECU field-56 experiments (superseded by field 43) |
-| `alpha_stop_charge_watch.py` | Watch Alpha Pro Stop-charge changes made in MasterView |
-| `find_masterbus_usb.ps1`, `ecu_capture_session.ps1` | USB Link detection and guided USBPcap capture |
-| `cache_product_images.py [--force]` | Download the tile product photos into `static/products/` |
+| `tools.show_fields` | Print the fields the application polls and the active control mappings, taken from the code (check `engine_ecu` before starting). No hardware access |
+| `tools.inspect_device snapshot --device <addr>` | Read-only field snapshot of a device: protocol, type, writability and value of every field (uses the known `max_index`; `--max-index N` overrides). Also `candidates` (on/off-looking writable fields of the Mass Chargers and the ECU), `writable` (Solar and Alpha Pro writable fields and dropdown options) and `controls` (the fields around the verified controls) |
+| `tools.alpha_stop_charge_watch` | Watch Alpha Pro Stop-charge changes made in MasterView (read-only) |
+| `tools.capture_hid [--seconds N]` | Print the raw HID input reports of the USB Link (read-only; for a capture of MasterAdjust use USBPcap, below) |
+| `tools.reversible_write_test <device> --confirm-write` | **writes** - switch a Mass Charger, the ECU (field 43) or Solar to the opposite state with the verified control code, verify, restore |
+| `tools.cache_product_images [--force]` | Download the tile product photos into `static/products/` |
+| `tools.build_manual` | Build `docs/manual.html` from `docs/MANUAL.md` |
+| `python -m mastervolt.reports.battery_health` | Read-only battery health report from the stored history (verdict per battery, cell resistance, current sharing, alarms, balancers); `--split` compares before/after a change; also available in the app under History → Reports |
+| `tools\find_masterbus_usb.ps1`, `tools\ecu_capture_session.ps1` | USB Link detection and guided USBPcap capture |
+
+The experiments with the ECU's field 56 (`ecu_control_test`, `ecu_commit_test`, `ecu_dropdown_probe`, `ecu_power_probe`) and the
+v0.x discovery tools were removed in 2.0.0; they stay in the Git history (tag `v1.22.2`).

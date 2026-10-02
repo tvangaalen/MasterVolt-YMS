@@ -10,6 +10,90 @@ Unless an entry says otherwise, every release also bumps the application version
 
 ---
 
+## 2.0 — Professional restructure
+
+### 2.0.0
+
+A ground-up reorganisation of the code, **with the hardware behaviour of 1.22.2 reproduced exactly** (proved by golden tests, below),
+a review and hardening of the Bluetooth connection code, a front end split into readable files, and a complete manual
+([`docs/MANUAL.md`](docs/MANUAL.md), also served at `/manual`). MasterBus field maps, control sequences, Float protection,
+DALY read/write sequences and timings are unchanged; the HTTP API answers exactly as before (65 recorded requests) apart from
+the additions listed under *API*.
+
+**Structure**
+- The flat modules became the **`mastervolt` package**: `masterbus` (usb, protocol, registry, io, discovery, shunt_config, labels,
+  controls, energy, float_policy, service), `bluetooth` (daly_protocol, link, coordinator, events, bms, balancers), `history` (store,
+  series, chart_cache, totals, recorder, service), `reports`, `api` (one router per area), plus `settings`, `soc`, `runtime`,
+  `config`, `logs`. The 1,474-line `MasterBusService` is now six cohesive classes behind a small facade; `app.py` (416 lines of
+  routes) is a 10-line entry point and nine routers; the 370-line `energy()` is a documented `EnergyModel`. `uvicorn app:app` and the
+  launchers are unchanged. Paths are injectable (`Paths`), so every service can run against a temporary folder.
+- **Settings are one table** (`mastervolt/settings.py`): defaults, limits, UI messages, validation, the saved file and the API request
+  model all derive from it (before, each setting was spelled out in three files).
+- **Front end:** the 179 KB `index.html` (117 KB of JavaScript on very long lines) is now `index.html` (markup), `css/app.css` and 14
+  `js/*.js` files, formatted with prettier; the AST of every file is identical to the old inline code. Side by side in one browser the
+  old and the new page have **no computed-style difference over 13 page states in both themes** and identical canvas pixels. The footer
+  version comes from `GET /api/version`, so the version is defined in one place (`mastervolt/__init__.py`).
+- **Python style:** formatted with black (the old `a=1;b=2` one-liners are gone) and checked with ruff (`pyproject.toml`); no star imports,
+  no bare `except:`, typed public signatures, docstrings that say *why*.
+- **Removed:** dead code (`_resolve_engine_ecu_power_control`, the `device_maps.json` heuristics, `masterbus_presentation`, the field-56
+  ECU experiments `ecu_control_test`/`ecu_commit_test`/`ecu_dropdown_probe`/`ecu_power_probe`, and the broken v0.x tools
+  `masterbus_discover`, `masterbus_monitor`, `masterbus_cache_schemas`, `masterbus_control` that no longer imported). The diagnostic
+  tools are now `tools/` with a shared helper: `inspect_device` (snapshot / candidates / writable / controls), `reversible_write_test`,
+  `show_fields`, `alpha_stop_charge_watch`, `capture_hid`. `masterbus_capture.py` used to start a 30 s HID listen merely by being
+  imported; it now has a `main`.
+
+**Bluetooth**
+- One `Supervisor` for all workers (BMS and balancers). Before, only the balancer had crash recovery: **a BMS worker that hit an
+  exception ended for good**, leaving that battery disconnected until a server restart. Now any exception or stray `CancelledError`
+  restarts the worker, and a monitor thread replaces a worker whose thread died or whose loop made no progress for 5 minutes.
+- **Scanning ends when the wanted balancers have been seen** (a detection-callback scan) instead of always holding the radio for the
+  full 12 s: less time in which BMS reads have to wait. The signal strength of every DALY device seen is still recorded.
+- BMS links use **cached GATT services** on Windows (as the balancers already did): faster reconnects.
+- **BMS back-off keeps growing.** A rescan used to reset the failure counter, so an unreachable battery cycled 1×, 2×, 4× the retry
+  interval for ever (never reaching the 60 s cap) with a 10 s scan every third attempt. The counter now resets only on a successful
+  connect; the rescan has its own counter.
+- Automatic BMS reads **wait up to 6 s for the radio** instead of 2 s: about 40% of them used to time out and be retried (visible as
+  `radio_wait` failures in `/api/bluetooth-events`) although the other read was nearly done. Manual and control priorities are untouched.
+- Workers wake **immediately** on a refresh request or a lost link (thread-safe `Wakeup`) instead of polling every 250 ms; the BMS
+  connection pause no longer blocks the worker's event loop.
+- **One DALY protocol module** (`daly_protocol`): frame building, a shared `FrameAssembler` (the balancer used to drop 13 bytes after a
+  bad frame, the BMS 1 byte; both now skip one byte), decoding, alarms and the voltage-derived SOC. The BMS MOS/SOC control flow is
+  split into readable steps with identical behaviour (the firmware-encoding tests pass unchanged).
+- The Bluetooth coordinator is created once by `Services` and handed to both services; `GET /api/bluetooth-coordinator` reads it from there.
+
+**MasterBus and the server**
+- **The USB Link is reopened automatically**: missing at start-up, or lost while running (5 consecutive bus errors, as opposed to a
+  device that merely does not answer), it is retried every 5 s; previously this needed a server restart, and a Link missing at start-up
+  disabled polling *and* Float protection's USB access for the whole run.
+- **Settings load per setting.** One invalid value or an unknown key from another version used to make the whole `user_settings.json`
+  be ignored - including `history_retention_days`, whose default (7 days) is far shorter than a configured 31 and would prune the
+  history. Now only the offending setting falls back to its default (and a warning is logged).
+- **Logging:** background loops no longer swallow errors silently. The first occurrence of each problem is logged with its traceback,
+  repeats at most every five minutes (`logs/server.log`, rotating, plus the console). History pruning runs once a minute instead of
+  every 10 s.
+- The history **export streams** in batches on its own connection (it used to load every row, about a gigabyte, into memory).
+- `GET /api/energy` no longer blocks the event loop while it computes (it runs in a worker thread).
+
+**API** (everything else is byte-identical to 1.22.2)
+- New: `GET /api/version`, `GET /manual`.
+- An unknown battery number is a plain **404** (it was a 503 reading "404: Unknown battery"); `POST /api/bms/{n}/refresh` without a
+  worker is a **503** with a reason (it was an unhandled 500); `POST /api/bms/{n}/set-soc-100` is now one of `set-soc-{mode}`
+  (same URL, same answer).
+- The Settings page accepts a BMS connection retry from 1 s, as the server always did (the page insisted on 5).
+
+**Tests** (the safety net that makes the above credible; `py -m tests.run_all`, 20 modules, no hardware)
+- **Golden tests against 1.22.2:** 56 control scenarios (every frame sent, every result and error text, including verify failures),
+  the energy model over 70 cache states (the alternator/total-load filter included), the real Float loop over 12 steps, 31 settings
+  cases, 108 DALY frames, House SOC, history charts/totals/series/export and 65 HTTP requests. Two deliberate mutations (a changed
+  filter constant, a wrong commit field) are caught.
+- A simulated USB Link (with a fake clock) and the simulated Bluetooth stack drive the real code, including crashes, `CancelledError`,
+  hung loops, unplugged USB devices and a **whole-application test through the lifespan**.
+- New release checks: the version, the service-worker cache name and file list, README, CHANGELOG and manual must agree; every
+  front-end script must parse.
+
+**Docs:** [`docs/MANUAL.md`](docs/MANUAL.md) (+ `manual.html`, built by `py -m tools.build_manual`), README and CLAUDE.md rewritten for
+the new layout; the device schemas and the verified field map moved into `docs/`.
+
 ## 1.22 — Balance page removed
 
 ### 1.22.2
