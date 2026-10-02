@@ -27,7 +27,7 @@ echo.
 echo Press Ctrl+C to stop the server.
 echo.
 
-py -m uvicorn app:app --host %MASTERVOLT_BIND% --port 8000 --ssl-keyfile "%~dp0certs\server-key.pem" --ssl-certfile "%~dp0certs\server-cert.pem"
+py -m uvicorn app:app --host %MASTERVOLT_BIND% --port 8000 --ssl-keyfile "%~dp0certs\server-key.pem" --ssl-certfile "%~dp0certs\server-cert.pem" --timeout-graceful-shutdown 5
 
 echo.
 echo Web server stopped.
