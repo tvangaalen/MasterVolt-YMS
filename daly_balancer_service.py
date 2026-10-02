@@ -38,6 +38,8 @@ SETTLE_SECONDS=4.0            # Windows releases a finished GATT connection asyn
 INCOMPLETE_RETRY_SECONDS=15.0
 MAX_BACKOFF_SECONDS=300.0     # failed balancers are retried after retry*2^n seconds, at most this long
 WATCHDOG_SECONDS=600.0        # no successful read for this long while the BMS links are healthy: rebuild the worker
+HANG_SECONDS=300.0            # the worker's event loop made no progress at all for this long: abandon it and start a new one
+MONITOR_SECONDS=10.0          # how often the monitor looks at the worker thread
 CRASH_BACKOFF_BASE=5.0        # seconds before the supervisor restarts a crashed worker (doubles per crash, at most 60 s)
 USE_CACHED_SERVICES=True      # Windows: skip GATT service discovery on every connect (the DALY layout never changes)
 
@@ -76,7 +78,7 @@ class DalyBalancerService:
 
     def __init__(self):
         self.lock=threading.RLock();self.stop_event=threading.Event();self.refresh_event=threading.Event()
-        self.thread=None;self.loop=None;self.clients={};self.ble_available=importlib.util.find_spec("bleak") is not None
+        self.thread=None;self.monitor=None;self.epoch=0;self.loop_tick=time.monotonic();self.loop=None;self.clients={};self.ble_available=importlib.util.find_spec("bleak") is not None
         self.settings_getter=lambda:{"balancer_refresh_interval":30,"balancer_connection_retry_seconds":30}
         self.buffers={name:bytearray() for name in DEVICE_NAMES};self.decoded={name:{} for name in DEVICE_NAMES};self.known_devices={};self.connection_failures={name:0 for name in DEVICE_NAMES}
         self.static_values={}
@@ -90,7 +92,29 @@ class DalyBalancerService:
     def start(self,settings_getter=None):
         if self.thread and self.thread.is_alive():return
         if settings_getter:self.settings_getter=settings_getter
-        self.stop_event.clear();self.thread=threading.Thread(target=self._thread_main,daemon=True,name="daly-balancers");self.thread.start()
+        self.stop_event.clear();self._spawn()
+        if self.ble_available and not (self.monitor and self.monitor.is_alive()):
+            self.monitor=threading.Thread(target=self._monitor_main,daemon=True,name="daly-balancers-monitor");self.monitor.start()
+
+    def _spawn(self):
+        self.epoch+=1;self.loop_tick=time.monotonic()
+        self.thread=threading.Thread(target=self._thread_main,args=(self.epoch,),daemon=True,name="daly-balancers");self.thread.start()
+
+    def _current(self,epoch):
+        """False once the service is stopping or this worker has been replaced by the monitor."""
+        return not self.stop_event.is_set() and (epoch is None or epoch==self.epoch)
+
+    def _monitor_main(self):
+        """The stall watchdog runs inside the worker's own loop, so it cannot help when that loop has died or hangs: this
+        thread notices a dead worker thread (an exception that escaped the supervisor) or an event loop that made no
+        progress for HANG_SECONDS, and starts a fresh worker. The old one is abandoned; it stops by itself if it ever wakes up."""
+        while not self.stop_event.wait(MONITOR_SECONDS):
+            thread=self.thread;dead=not (thread and thread.is_alive());stalled=time.monotonic()-self.loop_tick
+            if not dead and stalled<HANG_SECONDS:continue
+            self.worker_restarts+=1
+            ble_log.log("balancers","worker_dead" if dead else "worker_hung",
+                "the balancer worker thread had stopped" if dead else f"the balancer worker made no progress for {stalled:.0f} s",failure=True)
+            self._spawn()
 
     def stop(self):
         self.stop_event.set();self.refresh_event.set()
@@ -134,26 +158,26 @@ class DalyBalancerService:
                 "refresh_generation":self.refresh_generation,"completed_generation":self.completed_generation,
                 "refresh_interval_seconds":int(interval),
                 "retry_interval_seconds":int(settings["balancer_connection_retry_seconds"]),"coordinator":bluetooth_coordinator.snapshot(),
-                "wedged":self.wedged,"worker_restarts":self.worker_restarts,"watchdog_level":self.watchdog_level,
+                "wedged":self.wedged,"worker_alive":bool(self.thread and self.thread.is_alive()),"worker_restarts":self.worker_restarts,"watchdog_level":self.watchdog_level,
                 "devices":devices}
 
     def _set(self,name,**updates):
         with self.lock:self.devices[name]={**self.devices[name],**updates}
 
-    def _thread_main(self):
+    def _thread_main(self,epoch=None):
         """Supervisor: whatever goes wrong inside the Bluetooth loop, the balancers are rebuilt and polled again."""
         if not self.ble_available:
             for name in DEVICE_NAMES:self._set(name,state="error",error="Windows Bluetooth component unavailable")
             return
         crashes=0
-        while not self.stop_event.is_set():
+        while self._current(epoch):
             try:
-                asyncio.run(self._run())
+                asyncio.run(self._run(epoch))
                 crashes=0
             except BalancerWorkerRestart as exc:
                 self.restarts_without_success+=1;self.wedged=self.restarts_without_success>=3
                 ble_log.log("balancers","worker_restart",f"{exc} (restart {self.restarts_without_success} without a successful read)",failure=True)
-            except Exception as exc:
+            except (Exception,asyncio.CancelledError) as exc:       # a CancelledError raised by a Windows Bluetooth call is not an Exception: it once ended this thread for good
                 crashes+=1
                 for name in DEVICE_NAMES:self._set(name,state="error",error=f"Balancer worker crashed ({exc}); restarting automatically")
                 ble_log.log("balancers","worker_crash",repr(exc),failure=True)
@@ -352,14 +376,16 @@ class DalyBalancerService:
         """Sleep until the next balancer is due, a manual/full refresh is requested, or the service stops."""
         deadline=min(self.next_due.values())
         while not self.stop_event.is_set() and time.monotonic()<deadline and not self.refresh_event.is_set():
+            self.loop_tick=time.monotonic()
             await asyncio.sleep(min(.25,max(.005,deadline-time.monotonic())))
         if self.refresh_event.is_set() and self.refresh_generation<=self.completed_generation and not self.single_queue:self.refresh_event.clear()
 
-    async def _run(self):
+    async def _run(self,epoch=None):
         await asyncio.sleep(INITIAL_DELAY)
         self.last_progress=time.monotonic();was_ready=False
         try:
-            while not self.stop_event.is_set():
+            while self._current(epoch):
+                self.loop_tick=time.monotonic()
                 if not bluetooth_coordinator.bms_ready():
                     for name in DEVICE_NAMES:
                         self._set(name,state="waiting",error="Waiting for all BMS connections and initial readings")
@@ -404,11 +430,12 @@ class DalyBalancerService:
                         if manual:self._requeue_manual(manual)
                         await asyncio.sleep(1)
                         continue
-                    except Exception as exc:
+                    except (Exception,asyncio.CancelledError) as exc:
                         ble_log.log("balancers","scan_failed",repr(exc),failure=True)
                         for name in discover_names:self._set(name,state="error",error=f"Bluetooth scan failed: {exc}")
                 for name in targets:
-                    if self.stop_event.is_set():break
+                    if not self._current(epoch):break
+                    self.loop_tick=time.monotonic()
                     # A manual refresh request overtakes the rest of a running full cycle.
                     if not manual and self.single_queue:cycle_complete=False;break
                     device=discovered.get(name) or self.known_devices.get(name)
@@ -431,7 +458,7 @@ class DalyBalancerService:
                         cycle_complete=False
                         if manual:self._requeue_manual(manual[manual.index(name):])
                         break
-                    except Exception as exc:
+                    except (Exception,asyncio.CancelledError) as exc:
                         phase="read_failed" if name in self.clients else "connect_failed"     # the client is only registered after a successful connect
                         await self._disconnect(name);self.connection_failures[name]+=1
                         if self.connection_failures[name]>=2:self.known_devices.pop(name,None)
@@ -453,4 +480,4 @@ class DalyBalancerService:
                 if cycle_complete:self.completed_generation=max(self.completed_generation,cycle_generation)
                 if self.refresh_generation<=self.completed_generation and not self.single_queue:self.refresh_event.clear()
         finally:
-            await self._disconnect_all()
+            if epoch is None or epoch==self.epoch:await self._disconnect_all()     # a replaced worker must not close the new worker's links

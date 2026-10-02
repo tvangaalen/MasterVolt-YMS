@@ -2,8 +2,10 @@
 
 Covers: complete-status publishing (no half-read balancers in the history), one retry for unanswered commands,
 static device information read once, GATT time-outs, per-balancer exponential backoff, the crash-proof supervisor,
-the stall watchdog (rescan, worker rebuild, wedged flag and recovery) and the manual/full refresh semantics.
+the stall watchdog (rescan, worker rebuild, wedged flag and recovery), the manual/full refresh semantics, a CancelledError
+out of a Bluetooth call and a dead or hung worker (monitor thread).
 """
+import asyncio
 import time
 
 import bleak
@@ -19,7 +21,7 @@ NAMES = bal.DEVICE_NAMES
 
 def fast(**overrides):
     values = dict(INITIAL_DELAY=0, GATT_TIMEOUT=0.25, CONNECT_TIMEOUT=0.4, NOTIFY_TIMEOUT=0.4, DISCONNECT_TIMEOUT=0.3, COMMAND_SPACING=0.001,
-                  FRAME_WAIT=0.25, SETTLE_SECONDS=0.01, INCOMPLETE_RETRY_SECONDS=0.05, MAX_BACKOFF_SECONDS=0.4, WATCHDOG_SECONDS=600.0, CRASH_BACKOFF_BASE=0.02)
+                  FRAME_WAIT=0.25, SETTLE_SECONDS=0.01, INCOMPLETE_RETRY_SECONDS=0.05, MAX_BACKOFF_SECONDS=0.4, WATCHDOG_SECONDS=600.0, CRASH_BACKOFF_BASE=0.02, HANG_SECONDS=300.0, MONITOR_SECONDS=0.05)
     values.update(overrides)
     for key, value in values.items(): setattr(bal, key, value)
 
@@ -195,6 +197,63 @@ def main():
         assert all(COUNT[(n, "connect")] >= before[n] + 1 for n in NAMES)
         s.stop()
         print("Manual refresh reads one balancer, refresh all reads all three and completes: OK")
+
+        # ---- 11. a CancelledError out of a Windows Bluetooth call must not end the worker (it once did, silently, for 20+ minutes)
+        s, _ = make(interval=0.2)
+        BEHAVIOUR["DL-BAL1"]["cancel_connect"] = 2
+        s.start()
+        assert wait(lambda: all(s.devices[n]["captured_at"] for n in NAMES), 10), "the balancers stopped after a CancelledError"
+        out = s.refresh_all()
+        assert wait(lambda: s.snapshot()["completed_generation"] == out["generation"] and not s.snapshot()["busy"]), "a pending Refresh BAL never completed"
+        assert s.snapshot()["worker_alive"]
+        s.stop()
+        print("CancelledError from connect(): treated as a failed connect, balancers keep polling, Refresh BAL completes: OK")
+
+        # ---- 12. the supervisor itself survives it too (cancel arriving outside the per-balancer handler)
+        s, _ = make(interval=0.2)
+        state = {"n": 0}
+        original_watchdog = s._watchdog
+        def cancelling():
+            state["n"] += 1
+            if state["n"] == 1: raise asyncio.CancelledError()
+            original_watchdog()
+        s._watchdog = cancelling
+        s.start()
+        assert wait(lambda: all(s.devices[n]["captured_at"] for n in NAMES), 10), "worker did not restart after a CancelledError"
+        s.stop()
+        assert events("balancers", "worker_crash") == 1
+        print("CancelledError escaping the loop: supervisor restarts the worker: OK")
+
+        # ---- 13. monitor: a dead worker thread is replaced, a hung event loop is abandoned
+        s, _ = make(interval=0.2)
+        real_main = s._thread_main
+        calls = {"n": 0}
+        def dying(epoch=None):
+            calls["n"] += 1
+            if calls["n"] == 1: raise SystemExit()       # something that is neither Exception nor CancelledError ends the thread
+            real_main(epoch)
+        s._thread_main = dying
+        s.start()
+        assert wait(lambda: events("balancers", "worker_dead") >= 1, 10), "a dead worker thread was not noticed"
+        assert wait(lambda: s.snapshot()["worker_alive"] and all(s.devices[n]["captured_at"] for n in NAMES), 10), "no new worker after the thread died"
+        s.stop()
+        print("Monitor: a dead worker thread is replaced and polling resumes: OK")
+        s, _ = make(interval=0.2, HANG_SECONDS=0.6)
+        hung = {"done": False}
+        original_watchdog = s._watchdog
+        def blocking():
+            if not hung["done"]:
+                hung["done"] = True
+                time.sleep(2.5)                      # a synchronous call that blocks the whole event loop
+            original_watchdog()
+        s._watchdog = blocking
+        s.start()
+        old = s.thread
+        assert wait(lambda: events("balancers", "worker_hung") >= 1, 10), "a hung event loop was not noticed"
+        assert wait(lambda: s.thread is not old and all(s.devices[n]["captured_at"] for n in NAMES), 10), "no new worker after the hang"
+        assert s.snapshot()["worker_restarts"] >= 1
+        s.stop()
+        print("Monitor: a hung event loop is abandoned and replaced by a fresh worker: OK")
     finally:
         pass
     print("All balancer service checks: OK")

@@ -57,7 +57,7 @@ class Sender:
 
 class FakeClient:
     """Behaviour per device name in BEHAVIOUR: connect_hang, fail_connect (count), notify_hang, hang_write, hang_write_once,
-    drop_once / drop_always (sets of commands that are not answered), disconnect_hang."""
+    drop_once / drop_always (sets of commands that are not answered), disconnect_hang, cancel_connect (count)."""
 
     def __init__(self, device, timeout=None, disconnected_callback=None, winrt=None):
         self.device, self.b = device, BEHAVIOUR[device.name]
@@ -70,6 +70,9 @@ class FakeClient:
     async def connect(self):
         COUNT[(self.device.name, "connect")] += 1
         if self.b.get("connect_hang"): await asyncio.sleep(3600)
+        if self.b.get("cancel_connect", 0) > 0:      # bleak/WinRT can end connect() with a CancelledError nobody asked for
+            self.b["cancel_connect"] -= 1
+            raise asyncio.CancelledError()
         if self.b.get("fail_connect", 0) > 0:
             self.b["fail_connect"] -= 1
             raise RuntimeError("connect failed (simulated)")
