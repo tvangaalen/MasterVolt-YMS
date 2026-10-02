@@ -10,6 +10,13 @@ Unless an entry says otherwise, every release also bumps the application version
 
 ---
 
+## 1.20 — Battery and balancer integrated on the BMS page
+
+### 1.20.0
+- **BMS page: one combined table.** The separate balancer table from 1.19.0 is gone; balancer n now sits in battery n's column. The column header shows the balancer's state under the battery name (*Balancer OK*, *Balancer 7 min old*, ...; tapping it refreshes just that balancer). A new **BALANCING** section has Balance status, Balance current, Balance position and the balancer's temperature. In **CELLS**, every value (Average, Max difference, Cell 1-4) is the BMS reading with the balancer's reading small and grey underneath (`bal 3.411`); when the two differ by more than **15 mV** the balancer value turns amber (not when the balancer data is stale, which is dimmed instead). Cell values, highest/lowest dots and everything Float protection uses remain the BMS's.
+- **BMS page: Battery tiles show the cells and the balancer.** Under the gauge: four mini bars, one per cell, showing each cell's deviation from the pack average (scaled to at least +/-20 mV so a few millivolts do not look dramatic): green normal, amber highest, blue lowest, red at or above the Float cell trigger. The cell(s) the balancer is currently balancing pulse with a yellow outline and a lightning mark, and a line below says *cell 3 · 1.1 A* (or *Balancer idle*, or *Balancer N min old* when its data is stale). The bars come from the BMS cells; the balancer only supplies who is balancing and the current.
+- `/api/bms` and `/api/balancers` are now fetched in parallel and drawn in one pass, so the two never disagree on screen for a moment. The Balance page is unchanged apart from sharing the balancer status wording.
+
 ## 1.19 — BMS/Balance layout, History swipe, database status
 
 ### 1.19.0
