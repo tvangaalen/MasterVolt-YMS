@@ -1,6 +1,6 @@
 # Mastervolt Energy - Manual
 
-**Version 2.0.4** - the complete guide to using, operating and maintaining the application. It explains what every screen
+**Version 2.0.5** - the complete guide to using, operating and maintaining the application. It explains what every screen
 shows, how every number is obtained, what the application does on its own (Float protection, Bluetooth recovery, history),
 which files it keeps, what to do when something goes wrong, and how the code is organised for whoever changes it next.
 
@@ -274,7 +274,7 @@ the server or Bluetooth was down is not counted).
 **Battery health report.** *Reports → Battery health report* asks for a number of days (1-365), runs the analysis on the server
 in a separate low-priority process (it cannot slow down the measurements) and shows the result: a verdict per battery, cell
 connection resistance, how the parallel batteries share the current, cell-voltage exposure, alarms, Bluetooth reliability, the
-balancers and the start/bow batteries. Only one report runs at a time.
+balancers and the start/bow batteries. Only one report runs at a time. Some cells show a dash on purpose: the resistance analysis only uses load steps while the bank is between 30% and 90% SOC (the flat part of the LiFePO4 curve), so after days at 99-100% SOC the recent rows are empty - that is missing qualifying data, not a failure.
 
 ### 4.5 Settings
 

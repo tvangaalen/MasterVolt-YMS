@@ -51,6 +51,7 @@ def main():
         done = wait(reports)
         assert done["state"] == "done" and not done["error"], done
         md = done["markdown"]
+        assert "\r" not in md, "the report must come back with plain line endings (the page renders headings line by line)"
         for needle in ("# Battery health report", "## Verdict", "BATTERY 1", "BATTERY 3"):
             assert needle in md, needle
         assert done["duration_seconds"] is not None and done["finished_at"]

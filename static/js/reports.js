@@ -126,7 +126,7 @@ function reportMarkdownToHtml(md) {
         .replace(/^\||\|\s*$/g, '')
         .split('|')
         .map(c => c.trim()),
-    lines = md.split('\n'),
+    lines = md.split(/\r?\n/),
     out = [];
   let i = 0;
   while (i < lines.length) {

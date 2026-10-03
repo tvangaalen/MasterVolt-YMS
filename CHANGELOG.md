@@ -12,6 +12,10 @@ Unless an entry says otherwise, every release also bumps the application version
 
 ## 2.0 — Professional restructure
 
+### 2.0.5
+- **Battery health report: headings are headings again.** The report text came back from its process with Windows line endings (CRLF), and the page's small Markdown renderer did not match `# ...` lines that ended in a carriage return, so the section titles were shown as raw `## Verdict` text. The service now normalises the line endings and the renderer accepts both. (The tables and lists were never affected: all 9 tables and 52 rows of a live 7-day report are displayed, checked against the Markdown.)
+- Documented why some report cells show a dash: the cell-resistance analysis only uses current steps while the bank is at 30-90% SOC, so after two days at 99-100% SOC the "last 48 h" and recent-day rows have no qualifying data (checked on the live history: 0 of ~4,900 samples per battery in that window). The report's output and logic are otherwise identical to 1.22.2 (same data, same text).
+
 ### 2.0.4
 - **The manual is no dead end on the iPhone.** In the installed app the manual opens inside the app window, which has no browser back button. The manual now has a sticky **← Back to the app** button at the top: it closes a pop-up window (desktop), otherwise goes back in the history, otherwise to the app's start page.
 

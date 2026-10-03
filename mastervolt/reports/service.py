@@ -60,7 +60,7 @@ class BatteryHealthReports:
             if proc.returncode != 0:
                 lines = proc.stderr.decode("utf-8", "replace").strip().splitlines()
                 raise RuntimeError(" ".join(lines[-3:]) if lines else f"The report failed (exit code {proc.returncode})")
-            markdown = proc.stdout.decode("utf-8", "replace")
+            markdown = proc.stdout.decode("utf-8", "replace").replace("\r\n", "\n")  # Windows text mode wrote CRLF
         except subprocess.TimeoutExpired:
             error = f"The report took longer than {self.timeout} s and was stopped. Try fewer days."
         except Exception as exc:
