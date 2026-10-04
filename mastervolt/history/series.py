@@ -47,6 +47,8 @@ def dashboard_point(record_id: int, captured_at: str, encoded: str):
             "source_power": [(sources.get(key) or {}).get("power") for key in SOURCE_KEYS[1:]],
             "source_current": [(sources.get(key) or {}).get("current") for key in SOURCE_KEYS[1:]],
             "shore_voltage": shore.get("voltage"),
+            "shore_current": shore.get("current"),
+            "shore_power": shore.get("power"),
             "shore_connected": shore.get("connected"),
             "solar_panel_voltage": solar.get("panel_voltage"),
             "alternator_temperature": alternator.get("temperature"),

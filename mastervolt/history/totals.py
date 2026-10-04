@@ -4,7 +4,8 @@ Energy is the time integral of power between consecutive samples. Pairs further 
 Bluetooth was down) are left out and reported as missing coverage. Whole finished hours are remembered, so only the two edges
 of a requested period are computed; the index behind it is rebuilt only when the caches change.
 
-    sources / consumers : Wh per channel          batteries : Wh delivered (discharge) and received (charge)
+    sources / consumers : Wh per channel          shore : Wh taken in from shore power (AC)
+    batteries : Wh delivered (discharge) and received (charge)
     alarms              : alarm episodes (a run of alarm samples) and alarm samples per battery
 """
 
@@ -21,7 +22,10 @@ MAX_GAP_DASHBOARD = 120.0  # seconds; longer gaps (server down) are not integrat
 MAX_GAP_BMS = 180.0  # seconds; longer gaps (Bluetooth down) are not integrated
 SOURCE_CHANNELS = ("charger_house", "alternator", "solar")
 CONSUMER_CHANNELS = ("inverter", "charger_start", "charger_bow", "engine_ecu", "alternator_field", "other_dc")
-CHANNELS = len(SOURCE_CHANNELS) + len(CONSUMER_CHANNELS)
+SHORE_CHANNEL = len(SOURCE_CHANNELS) + len(
+    CONSUMER_CHANNELS
+)  # shore power intake (AC): the last channel, kept out of the DC source and consumer lists
+CHANNELS = SHORE_CHANNEL + 1
 FINISHED_HOUR_MARGIN = 600  # seconds: an hour is remembered once it is this long over (late samples)
 
 
@@ -42,11 +46,12 @@ def battery_watts(point):
 
 
 def channel_vector(point) -> list[float]:
-    """Nine non-negative channel powers: 3 sources (charger house, alternator, solar) + 6 DC consumers."""
+    """Ten non-negative channel powers: 3 DC sources (charger house, alternator, solar), 6 DC consumers, and the shore power intake."""
     out = []
     for field, count in (("source_power", len(SOURCE_CHANNELS)), ("load_power", len(CONSUMER_CHANNELS))):
         values = point.get(field) or []
         out.extend(max(0.0, float(values[index] or 0.0)) if index < len(values) else 0.0 for index in range(count))
+    out.append(max(0.0, float(point.get("shore_power") or 0.0)))
     return out
 
 
@@ -188,8 +193,9 @@ class EnergyTotals:
             "end": last.isoformat(),
             "span_seconds": b - a,
             "sources": rows(SOURCE_CHANNELS, energy[:3]),
+            "shore": rows(("shore",), energy[SHORE_CHANNEL : SHORE_CHANNEL + 1])[0],
             "sources_covered_seconds": covered,
-            "consumers": rows(CONSUMER_CHANNELS, energy[3:]),
+            "consumers": rows(CONSUMER_CHANNELS, energy[3:SHORE_CHANNEL]),
             "consumers_covered_seconds": covered,
             "batteries": batteries,
             "alarms": alarms,

@@ -18,6 +18,13 @@ def jsonable(value):
     return json.loads(json.dumps(value, default=str))
 
 
+NEW_POINT_KEYS = ("shore_current", "shore_power")  # added in 2.1.0; the 1.22.2 golden file predates them
+
+
+def without_new(points):
+    return [{k: v for k, v in point.items() if k not in NEW_POINT_KEYS} for point in points]
+
+
 def digest(value):
     """Large structures are compared by length and checksum so the golden file stays small."""
     encoded = json.dumps(value, sort_keys=True, default=str)
@@ -193,9 +200,9 @@ def run_history(HistoryService):
     out["dashboard_series"] = {
         "earliest_id": series["earliest_id"],
         "latest_id": series["latest_id"],
-        "points": digest(series["points"]),
-        "first": series["points"][0],
-        "last": series["points"][-1],
+        "points": digest(without_new(series["points"])),
+        "first": without_new(series["points"][:1])[0],
+        "last": without_new(series["points"][-1:])[0],
     }
     out["refresh"] = service.refresh_chart_cache()
     for hours in (0.25, 1, 3, 12):
@@ -209,7 +216,9 @@ def run_history(HistoryService):
         ("2026-10-01T08:30:00Z", "2026-10-01T10:15:30Z"),
         ("2026-10-01T10:00:00+00:00", "2026-10-01T10:00:30+00:00"),
     ):
-        out[f"contrib_{first}_{last}"] = service.contributions(first, last)
+        totals = service.contributions(first, last)
+        totals.pop("shore", None)  # added in 2.1.0 (tests/test_history.py covers it); the 1.22.2 golden file predates it
+        out[f"contrib_{first}_{last}"] = totals
     for bad in (("x", "y"), ("2026-10-01T10:00:00Z", "2026-10-01T09:00:00Z")):
         try:
             service.contributions(*bad)

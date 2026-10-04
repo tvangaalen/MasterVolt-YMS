@@ -1,6 +1,6 @@
 # MasterVolt YMS
 
-**Mastervolt Energy v2.0.5** — a private web app (installable iPhone PWA) that monitors and controls a boat's
+**Mastervolt Energy v2.1.0** — a private web app (installable iPhone PWA) that monitors and controls a boat's
 Mastervolt electrical system and its DALY battery management, from a Windows PC on the boat's LAN.
 
 - **MasterBus** over the Mastervolt USB Link: CombiMaster (shore power, inverter, charger), Solar ChargeMaster,
@@ -17,7 +17,7 @@ guide. Release history: [CHANGELOG.md](CHANGELOG.md). Protocol findings and fiel
 | Page | What it does |
 |---|---|
 | **Control panel** | Sources, Storage and Loads tiles with live V/A/W and an arc-gauge SOC; ON/OFF controls; Motor / Anchor / Sail / Marina modes (the last one applied is remembered server-side and highlighted for every browser); shore-power AC limit; `INV` and `SUP`; Engine ECU power with a safety confirmation |
-| **BMS** | The three batteries side by side with their balancers: SOC gauge, V/A/°C and per-cell balancer bars in each tile; a table with status, balancing, cell voltages (BMS and balancer) and Charge/Discharge controls; Set SOC (curve, 100% or a manual percentage); separate Refresh BMS and Refresh BAL |
+| **BMS** | The three batteries side by side with their balancers: SOC gauge, V/A/°C and per-cell balancer bars in each tile; a table with status, balancing, the BMS cell voltages and Charge/Discharge controls; Set SOC (curve, 100% or a manual percentage); separate Refresh BMS and Refresh BAL |
 | **History** | Sources, Storage, Loads and Alarms charts from a server-side cache, with 4 h … All, Custom and Zoom ranges and a donut with exact totals per tab; a Reports tab with the battery health report |
 | **Settings** | Default AC limit, Float protection thresholds, refresh/retry intervals, history retention, database status, a link to the manual |
 

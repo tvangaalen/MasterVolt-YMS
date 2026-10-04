@@ -117,13 +117,24 @@ function renderSourcesHistory() {
     sourcePowerMeta,
     powerKey,
     true,
-    { leftStep: 250, right: { unit: ' A', scale: 1 / veff } }
+    { leftStep: 250, right: { unit: ' A', scale: 1 / veff, step: 10 } }
   );
   setHistoryLegend('historySourcePowerLegend', 'sourcePower', sourcePowerMeta);
   const shore = dashboardSingle('shore_voltage', 'shore', 'Shore AC V', '#7db9ff'),
     solar = dashboardSingle('solar_panel_voltage', 'solar', 'PV V', '#65d92f'),
-    alternator = dashboardSingle('alternator_temperature', 'alternator', 'Alternator °C', '#f4a631');
-  drawHistoryChart($('historyShoreCondition'), shore.series, ' V', shore.meta, null, true);
+    alternator = dashboardSingle('alternator_temperature', 'alternator', 'Alternator °C', '#f4a631'),
+    shoreAmps = dashboardSingle('shore_current', 'shoreA', 'Shore A', '#f4a631'),
+    shoreIntake = dashboardSingle('shore_power', 'intake', 'Shore power W', '#7db9ff');
+  // volts on the left, amps on the right: 0-20 A in steps of 5 A
+  drawHistoryChart($('historyShoreCondition'), shore.series, ' V', shore.meta, null, true, {
+    series: shoreAmps.series,
+    meta: shoreAmps.meta,
+    min: 0,
+    max: 20,
+    ticks: [0, 5, 10, 15, 20],
+    unit: ' A'
+  });
+  drawHistoryChart($('historyShoreIntake'), shoreIntake.series, ' W', shoreIntake.meta, null, true);
   drawHistoryChart($('historySolarCondition'), solar.series, ' V', solar.meta, null, true);
   drawHistoryChart($('historyAlternatorCondition'), alternator.series, '°C', alternator.meta, null, true);
 }

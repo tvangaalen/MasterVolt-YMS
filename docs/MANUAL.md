@@ -1,6 +1,6 @@
 # Mastervolt Energy - Manual
 
-**Version 2.0.5** - the complete guide to using, operating and maintaining the application. It explains what every screen
+**Version 2.1.0** - the complete guide to using, operating and maintaining the application. It explains what every screen
 shows, how every number is obtained, what the application does on its own (Float protection, Bluetooth recovery, history),
 which files it keeps, what to do when something goes wrong, and how the code is organised for whoever changes it next.
 
@@ -229,9 +229,8 @@ battery's name refreshes just that battery; tapping a balancer's status line ref
   figures), and the **Set SOC** buttons (below).
 * **BALANCING** - the balancer's *Balance status* (Active/Inactive), *Balance current*, *Balance position* (which cells are being
   balanced) and its *Temperature*. The column header shows the balancer's own state and age.
-* **CELLS** - *Average*, *Max difference* and one row per cell: the voltage from the BMS, with the balancer's reading beneath it.
-  The second reading turns amber when the two instruments differ by 15 mV or more. The lowest and highest cells carry a blue and
-  a red dot.
+* **CELLS** - *Average*, *Max difference* and one row per cell, all from the BMS (the balancer's readings are in the tile bars and the
+  BALANCING section). The lowest and highest cells carry a blue and a red dot.
 * **CONTROL** - **Charge** and **Discharge** MOSFET switches for each battery (green = ON), and **All charge / All discharge** for
   all three. Switching a MOSFET OFF is only offered while it is safe: *Charge OFF* while the battery's current is zero or positive
   (it is not being discharged through that path), *Discharge OFF* while the current is zero or negative. A disabled button's
@@ -261,7 +260,7 @@ fetched at full resolution as soon as it is selected, so nothing is missing from
 
 | Tab | Charts | Totals (donut) |
 |---|---|---|
-| **Sources** | *Generated power* (stacked: Charger House, Alternator, Solar, with a smooth Total line; the left axis in watts is stepped in 250 W) and *Source conditions* (shore voltage, solar panel voltage, alternator temperature, axes from zero) | energy delivered by each source in the period |
+| **Sources** | *Generated power* (stacked: Charger House, Alternator, Solar, with a smooth Total line; the left axis in watts is stepped in 250 W, the right axis in amps from 0 in steps of 10 A), *Source conditions* (shore voltage on the left axis together with the shore current on the right axis, 0-20 A in steps of 5 A; solar panel voltage; alternator temperature; axes from zero) and *Shore power intake* (the AC power taken in from shore power, with **Total kWh intake over the selected period** underneath, summed on the server from the full-resolution history) | energy delivered by each source in the period |
 | **Storage** | *Remaining* energy (kWh), *Charge/discharge* (watts on the left axis, amps on the right), per-battery *Voltage* and *Cell voltages* with a selectable battery | energy in and out of each battery |
 | **Loads** | *Consumption*, stacked per consumer with a total line (watts and amps) and the AC loads | energy per consumer |
 | **Alarms** | a timeline of every BMS alarm and MOSFET change, with per-battery metrics | alarm episodes and samples per battery |

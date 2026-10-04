@@ -10,6 +10,14 @@ Unless an entry says otherwise, every release also bumps the application version
 
 ---
 
+## 2.1 — Shore power history
+
+### 2.1.0
+- **History / Sources / Source conditions:** the *Shore Power AC voltage* chart now also shows the **shore current** on a right-hand axis (0-20 A in steps of 5 A); the voltage keeps the left axis.
+- **History / Sources: new section *Shore power intake*** with a line of the power (W) taken in from shore power over the selected period, and underneath **Total kWh intake over the selected period** with the average power and how much of the period was recorded. The total is the time integral of the shore power over the full-resolution history, summed on the server (`GET /api/history/contributions` has a new `shore` entry: `wh`, `avg_w`); the browser only displays it. The chart points now carry `shore_current` and `shore_power` (read from the stored dashboard samples, so the whole history shows them after a restart).
+- **History / Sources / Generated power:** the right-hand axis in amps now starts at 0 and steps by 10 A.
+- **BMS table, CELLS section:** all balancer values are gone; Average, Max difference and every cell show the BMS values only. (The balancer readings remain in the tile bars and the BALANCING section.)
+
 ## 2.0 — Professional restructure
 
 ### 2.0.5

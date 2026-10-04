@@ -98,7 +98,8 @@ function niceStep(raw) {
     n = raw / magnitude;
   return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10) * magnitude;
 }
-function drawHistoryChart(canvas, series, unit, meta = historySeries, axis = null, zeroBase = false) {
+// `right` (optional) puts a second set of series on a right-hand axis: { series, meta, min, max, ticks, unit }.
+function drawHistoryChart(canvas, series, unit, meta = historySeries, axis = null, zeroBase = false, right = null) {
   const box = canvas.parentElement.getBoundingClientRect(),
     dpr = Math.min(devicePixelRatio || 1, 2),
     width = Math.max(280, Math.round(box.width)),
@@ -112,7 +113,7 @@ function drawHistoryChart(canvas, series, unit, meta = historySeries, axis = nul
   const styles = getComputedStyle(document.documentElement),
     text = styles.getPropertyValue('--muted').trim(),
     line = styles.getPropertyValue('--line').trim(),
-    plot = { left: 48, right: 8, top: 9, bottom: 27 },
+    plot = { left: 48, right: right ? 44 : 8, top: 9, bottom: 27 },
     all = meta.flatMap(s => series[s.key] || []);
   if (!all.length) return;
   let minX = Infinity,
@@ -153,6 +154,21 @@ function drawHistoryChart(canvas, series, unit, meta = historySeries, axis = nul
     ctx.textBaseline = 'middle';
     ctx.fillText(axis?.labels?.[value] ?? `${value.toFixed(decimals)}${unit}`, plot.left - 5, py);
   });
+  const y2 = v => plot.top + ((right.max - Math.min(right.max, Math.max(right.min, v))) / (right.max - right.min)) * ph;
+  if (right) {
+    ctx.save();
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    right.ticks.forEach(value => {
+      const py = y2(value);
+      ctx.beginPath();
+      ctx.moveTo(width - plot.right, py);
+      ctx.lineTo(width - plot.right + 3, py);
+      ctx.stroke();
+      ctx.fillText(`${value}${right.unit}`, width - plot.right + 5, py);
+    });
+    ctx.restore();
+  }
   drawTimeAxis(ctx, minX, maxX, plot, pw, ph, width, height);
   ctx.save();
   ctx.beginPath();
@@ -176,6 +192,17 @@ function drawHistoryChart(canvas, series, unit, meta = historySeries, axis = nul
     ctx.globalAlpha = item.key === 'total' ? 1 : 0.82;
     ctx.stroke();
   });
+  if (right)
+    right.meta.forEach(item => {
+      const points = historySample(right.series[item.key] || [], Math.max(300, Math.floor(pw * 2)));
+      if (!points.length) return;
+      ctx.beginPath();
+      points.forEach((point, i) => (i ? ctx.lineTo(x(point[0]), y2(point[1])) : ctx.moveTo(x(point[0]), y2(point[1]))));
+      ctx.strokeStyle = item.color;
+      ctx.lineWidth = item.width || 1.5;
+      ctx.globalAlpha = 0.9;
+      ctx.stroke();
+    });
   ctx.restore();
   ctx.globalAlpha = 1;
 }
@@ -281,8 +308,17 @@ function drawStackedHistoryChart(
   drawTimeAxis(ctx, minX, maxX, plot, pw, ph, width, height);
   if (axis && axis.right) {
     const right = axis.right,
-      ticks = right.ticks || Array.from({ length: 5 }, (_, i) => maxY - ((maxY - minY) * i) / 4),
-      digits = right.decimals ?? (Math.abs(maxY * right.scale) < 20 ? 1 : 0);
+      ticks =
+        right.ticks ||
+        (right.step
+          ? (() => {
+              // whole steps in the right-hand unit from zero (for example every 10 A), converted back to the left axis' unit
+              const arr = [];
+              for (let a = 0; a / right.scale <= maxY + 1e-6; a += right.step) arr.push(a / right.scale);
+              return arr;
+            })()
+          : Array.from({ length: 5 }, (_, i) => maxY - ((maxY - minY) * i) / 4)),
+      digits = right.decimals ?? (right.step ? 0 : Math.abs(maxY * right.scale) < 20 ? 1 : 0);
     ctx.save();
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';

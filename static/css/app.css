@@ -1545,23 +1545,6 @@ html[data-theme='light'] .bms-all-off-row .bms-action:disabled {
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
-.bms-dual {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  line-height: 1.15;
-}
-.bal-sub {
-  font-size: 8px;
-  font-weight: 600;
-  color: var(--muted);
-  font-variant-numeric: tabular-nums;
-}
-.bal-sub.bal-diff {
-  color: var(--orange);
-  font-weight: 800;
-}
-.bal-sub.bal-stale,
 .bal-stale {
   opacity: 0.45;
 }
@@ -2656,4 +2639,25 @@ html[data-theme='light'] .range-row input::-moz-range-thumb {
   text-align: center;
   color: var(--muted);
   font-size: 12px;
+}
+.shore-v {
+  color: #7db9ff;
+}
+.shore-a {
+  color: #f4a631;
+}
+.shore-total {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.shore-total strong {
+  color: var(--text);
+  font-weight: 800;
+}
+.shore-total small {
+  display: block;
+  margin-top: 2px;
+  font-size: 9px;
 }

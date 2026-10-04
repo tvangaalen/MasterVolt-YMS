@@ -81,6 +81,12 @@ function pieMessage(text, isError) {
   card.querySelector('.pie-legend').innerHTML = `<div class="pie-msg${isError ? ' error' : ''}">${esc(text)}</div>`;
   card.querySelector('.pie-note').textContent = '';
 }
+// "Shore power intake" shows the exact energy taken in from shore power over the selected period (summed on the server).
+function renderShoreTotal(data, covers) {
+  const box = $('shoreIntakeTotal');
+  if (!box || !data || !data.shore) return;
+  box.innerHTML = `Total kWh intake over the selected period: <strong>${(data.shore.wh / 1000).toFixed(2)} kWh</strong><small>avg ${pieWatts(data.shore.avg_w)} · ${covers(data.sources_covered_seconds)}</small>`;
+}
 function renderPies() {
   const data = contribData,
     id = pieTabs[historyActiveTab];
@@ -106,6 +112,7 @@ function renderPies() {
         note: covers(sources ? data.sources_covered_seconds : data.consumers_covered_seconds)
       }
     );
+    if (sources) renderShoreTotal(data, covers);
   } else if (historyActiveTab === 'storage') {
     const rows = data.batteries;
     drawPieCard(

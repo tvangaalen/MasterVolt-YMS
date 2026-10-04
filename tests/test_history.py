@@ -1,4 +1,4 @@
-"""Non-hardware self-test for EnergyTotals.contributions() (the History-page pie charts).
+﻿"""Non-hardware self-test for EnergyTotals.contributions() (the History-page pie charts).
 
 Synthetic hour with known powers, so every expected energy can be worked out by hand:
 - Solar 100 W all hour, alternator 50 W for the first 30 min, charger house 0 W.
@@ -55,7 +55,7 @@ def main():
             for name, current, alarms in (
                 ("BATTERY 1", -10.0, []),
                 ("BATTERY 2", 5.0, []),
-                ("BATTERY 3", 0.0, ["Cell voltage high – level 2"] if index in (10, 11, 30, 50, 51, 52) else []),
+                ("BATTERY 3", 0.0, ["Cell voltage high â€“ level 2"] if index in (10, 11, 30, 50, 51, 52) else []),
             ):
                 history.record(
                     "bms",
@@ -328,6 +328,48 @@ def db_status_test():
     print("db_status(): totals, per-source counts, oldest/newest, sizes and caching: OK")
 
 
+def shore_intake_test():
+    """The shore power intake: energy over a period summed on the server from the full-resolution dashboard samples."""
+    with tempfile.TemporaryDirectory(prefix="hist shore ") as tmp:
+        history = HistoryService(Path(tmp) / "history.sqlite3")
+        start = datetime(2026, 10, 1, 8, 0, 0, tzinfo=UTC)
+
+        def sample(seconds, watts, amps):
+            payload = {"sources": {"shore": {"power": watts, "current": amps, "voltage": 230.0, "connected": True}}, "consumers": {}}
+            history.record("dashboard", payload, None, (start + timedelta(seconds=seconds)).isoformat())
+
+        for minute in range(0, 121):  # two hours at a steady 1000 W (4.35 A), one sample a minute
+            sample(minute * 60, 1000.0, 4.35)
+        # shore power drops out: no samples from minute 121 to 149 (longer than the 120 s gap limit)
+        for minute in range(150, 181):  # then half an hour at 500 W
+            sample(minute * 60, 500.0, 2.17)
+        history.refresh_chart_cache()
+        points = history.chart_data(12)["dashboard"]
+        assert (
+            points[0]["shore_power"] == 1000.0 and points[0]["shore_current"] == 4.35
+        ), "chart points must carry the shore current and power"
+        whole = history.contributions(start.isoformat(), (start + timedelta(hours=3)).isoformat())
+        shore = whole["shore"]
+        # 2 h x 1000 W + 0.5 h x 500 W = 2.25 kWh; the 30-minute gap is not integrated and shows in the covered time
+        assert abs(shore["wh"] - 2250.0) < 1.0, shore
+        assert abs(whole["sources_covered_seconds"] - (2 * 3600 + 1800)) < 1.0, whole["sources_covered_seconds"]
+        assert abs(shore["avg_w"] - 900.0) < 1.0, shore  # averaged over the recorded 2.5 h, not the 3 h selected
+        # a sub-period inside the steady stretch, and the parts add up exactly
+        first_hour = history.contributions(start.isoformat(), (start + timedelta(hours=1)).isoformat())["shore"]["wh"]
+        second_hour = history.contributions((start + timedelta(hours=1)).isoformat(), (start + timedelta(hours=2)).isoformat())["shore"][
+            "wh"
+        ]
+        assert abs(first_hour - 1000.0) < 1.0 and abs(second_hour - 1000.0) < 1.0 and abs(first_hour + second_hour - 2000.0) < 1e-6
+        # shore power must not leak into the DC source or consumer lists (the donut totals are DC)
+        assert [row["key"] for row in whole["sources"]] == ["charger_house", "alternator", "solar"]
+        assert len(whole["consumers"]) == 6 and all(row["wh"] == 0 for row in whole["sources"] + whole["consumers"])
+        # a point without shore data (older samples, a disconnected feed) counts as zero
+        history.record("dashboard", {"sources": {}, "consumers": {}}, None, (start + timedelta(hours=4)).isoformat())
+        history.refresh_chart_cache()
+        assert history.contributions(start.isoformat(), (start + timedelta(hours=5)).isoformat())["shore"]["wh"] >= 2250.0 - 1.0
+    print("Shore power intake: kWh over a period from the full-resolution samples, gaps excluded, parts add up: OK")
+
+
 def export_test():
     """The export streams in batches (on a connection of its own) instead of loading the whole history into memory."""
     from mastervolt.history import store as history_store
@@ -358,4 +400,5 @@ if __name__ == "__main__":
     chart_data_test()
     refresh_chart_cache_trim_test()
     db_status_test()
+    shore_intake_test()
     export_test()

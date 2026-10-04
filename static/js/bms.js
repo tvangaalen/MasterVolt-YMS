@@ -91,10 +91,9 @@ function bmsMatrix(data, balData) {
   const names = ['BATTERY 1', 'BATTERY 2', 'BATTERY 3'],
     items = names.map(name => data.batteries[name] || { battery: name, state: 'not_read' });
   const maxCells = Math.max(4, ...items.map(x => (x.cells_mv || []).length));
-  // Balancer n (DL-BALn) belongs to battery n. Cell voltages shown here and used for Float protection are always the BMS's;
-  // the balancer only adds who is balancing (and with how much current) and a small second reading to compare (amber from BAL_DIFF_MV apart).
-  const BAL_DIFF_MV = 15,
-    bals = ['DL-BAL1', 'DL-BAL2', 'DL-BAL3'].map(name => balData?.devices?.[name] || null),
+  // Balancer n (DL-BALn) belongs to battery n. The CELLS section shows the BMS's own cell voltages only (the ones Float protection
+  // uses); the balancer's readings are in the tile bars and the BALANCING section.
+  const bals = ['DL-BAL1', 'DL-BAL2', 'DL-BAL3'].map(name => balData?.devices?.[name] || null),
     balHas = bal => !!(bal && bal.status && bal.status.valid_frame_count);
   const cellList = cells =>
     cells.length === 1
@@ -106,13 +105,6 @@ function bmsMatrix(data, balData) {
     const bal = bals[index];
     return balHas(bal) ? `<span class="${bal.stale ? 'bal-stale' : ''}">${fn(bal.status)}</span>` : '—';
   };
-  const balSub = (index, bmsMv, balMv, fmt) => {
-    const bal = bals[index];
-    if (!balHas(bal) || balMv == null || !Number.isFinite(Number(balMv))) return '';
-    const diff = bmsMv != null && !bal.stale && Math.abs(Number(balMv) - Number(bmsMv)) > BAL_DIFF_MV;
-    return `<span class="bal-sub${bal.stale ? ' bal-stale' : ''}${diff ? ' bal-diff' : ''}" title="Balancer reading${diff ? ` - ${Math.round(Math.abs(balMv - bmsMv))} mV from the BMS` : ''}">bal ${fmt(balMv)}</span>`;
-  };
-  const dual = (main, sub) => (sub ? `<span class="bms-dual">${main}${sub}</span>` : main);
   const balHead = (bal, index) => {
     const has = balHas(bal),
       text = bal?.stale
@@ -312,31 +304,27 @@ function bmsMatrix(data, balData) {
     items.map((x, i) => balVal(i, s => (s.temperatures_c || []).map(v => `${Math.round(Number(v))}°C`).join(', ') || '—'))
   );
   html += '<div class="bms-matrix-cell bms-matrix-section">CELLS</div>';
-  const mvText = mv => (Number(mv) / 1000).toFixed(3),
-    spreadText = mv => `${Math.round(Number(mv))} mV`;
   html += valueRow(
     'Average',
-    items.map((x, i) => {
+    items.map(x => {
       const avg = averageCellVolts(x);
-      return dual(voltageReading(avg), balSub(i, avg == null ? null : avg * 1000, bals[i]?.status?.average_cell_mv, mvText));
+      return voltageReading(avg);
     }),
     'voltage-cell'
   );
   html += valueRow(
     'Max difference',
-    items.map((x, i) =>
-      dual(bmsNumber(x.cell_spread_mv, 0, ' mV'), balSub(i, x.cell_spread_mv, bals[i]?.status?.cell_delta_mv, spreadText))
-    )
+    items.map(x => bmsNumber(x.cell_spread_mv, 0, ' mV'))
   );
   for (let cell = 0; cell < maxCells; cell++)
     html += valueRow(
       `Cell ${cell + 1}`,
-      items.map((x, i) => {
+      items.map(x => {
         const cells = (x.cells_mv || []).map(Number),
           mv = cells[cell];
         if (mv == null) return '—';
         const dots = `${mv === Math.max(...cells) ? '<i class="cell-dot high" title="Highest cell"></i>' : ''}${mv === Math.min(...cells) ? '<i class="cell-dot low" title="Lowest cell"></i>' : ''}`;
-        return dots + dual(voltageReading(mv / 1000), balSub(i, mv, (bals[i]?.status?.cells_mv || [])[cell], mvText));
+        return dots + voltageReading(mv / 1000);
       }),
       'voltage-cell'
     );
