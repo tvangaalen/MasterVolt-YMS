@@ -1,6 +1,6 @@
 # Mastervolt Energy - Manual
 
-**Version 2.1.1** - the complete guide to using, operating and maintaining the application. It explains what every screen
+**Version 2.1.2** - the complete guide to using, operating and maintaining the application. It explains what every screen
 shows, how every number is obtained, what the application does on its own (Float protection, Bluetooth recovery, history),
 which files it keeps, what to do when something goes wrong, and how the code is organised for whoever changes it next.
 
@@ -139,7 +139,7 @@ Everything the application logs appears there. Stop it with **Ctrl+C**.
 
 **Starting automatically when the PC boots.** `tools\install_autostart.ps1` registers a scheduled task that starts the server 30 seconds
 after every boot, before anybody has logged on. Run it once from an **elevated** PowerShell (Run as administrator) in the folder the
-server runs from; it asks for the Windows password of the account that runs the server and checks it before changing anything.
+server runs from. Windows blocks unsigned scripts, so start it with `powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\install_autostart.ps1` (this one command only; the system policy stays as it is); it asks for the Windows password of the account that runs the server and checks it before changing anything.
 The account matters: Python and its packages are installed for one user, so only that user can run the server. The password goes
 to Task Scheduler, which stores it protected; the script saves it nowhere. `-Status` shows the task and whether the server answers,
 `-Remove` removes the task. Two limits: a boot-time task has no desktop, so there is no console window (look at `logs\`), and Windows

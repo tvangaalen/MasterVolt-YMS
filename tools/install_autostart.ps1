@@ -1,11 +1,12 @@
 <#
   Start the Mastervolt server automatically when the PC boots - before anybody has logged on - with a scheduled task.
 
-  Run it once from an ELEVATED PowerShell (Run as administrator), from the folder the server runs from:
+  Run it once from an ELEVATED PowerShell (Run as administrator), from the folder the server runs from. Windows blocks
+  unsigned scripts by default, so start it like this (this one command only; the system policy stays as it is):
 
-      .\tools\install_autostart.ps1                 install (asks for the Windows password of the account that runs the server)
-      .\tools\install_autostart.ps1 -Status         show the task and whether the server answers
-      .\tools\install_autostart.ps1 -Remove         remove the task again
+      powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\install_autostart.ps1             install (asks for the Windows password of the account that runs the server)
+      powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\install_autostart.ps1 -Status     show the task and whether the server answers
+      powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\install_autostart.ps1 -Remove     remove the task again
 
   Why the password: a task that runs "whether the user is logged on or not" must be stored with that account's
   password. The account matters because Python and its packages (hidapi, bleak, fastapi) are installed for that user only.
@@ -83,4 +84,4 @@ Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Se
     -User $credential.UserName -Password $credential.GetNetworkCredential().Password -RunLevel Limited -Force | Out-Null
 
 "Installed '$TaskName': it starts $Launcher 30 seconds after every boot, as $account."
-"It is not started now (a server may already be running). Check it after the next reboot with:  .\tools\install_autostart.ps1 -Status"
+"It is not started now (a server may already be running). Check it after the next reboot with:  powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\install_autostart.ps1 -Status"

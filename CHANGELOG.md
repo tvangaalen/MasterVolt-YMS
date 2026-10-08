@@ -12,6 +12,9 @@ Unless an entry says otherwise, every release also bumps the application version
 
 ## 2.1 — Shore power history
 
+### 2.1.2
+- The autostart installer is started with `powershell -NoProfile -ExecutionPolicy Bypass -File ...`: Windows refuses to run the unsigned script directly ("not digitally signed"). The system execution policy is not changed.
+
 ### 2.1.1
 - **Start at boot:** `tools/install_autostart.ps1` registers a scheduled task that starts the server 30 s after every boot, before anybody has logged on (installed once from an elevated PowerShell; it asks for and validates the Windows password of the account that runs the server, which Task Scheduler needs for a task that runs while nobody is logged on; `-Status`, `-Remove`). A boot-time task has no desktop: no console window, and Windows may refuse Bluetooth/USB to such a session - the manual says how to check and what to do then.
 
