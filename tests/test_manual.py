@@ -38,6 +38,7 @@ def main():
         "docs/local-https.md",
         "docs/VERIFIED_FIELD_MAP.txt",
         "tools/find_masterbus_usb.ps1",
+        "tools/install_autostart.ps1",
         "tools/ecu_capture_session.ps1",
     ):
         assert (PATHS.base / doc).is_file(), f"the manual mentions {doc}"

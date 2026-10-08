@@ -12,6 +12,9 @@ Unless an entry says otherwise, every release also bumps the application version
 
 ## 2.1 — Shore power history
 
+### 2.1.1
+- **Start at boot:** `tools/install_autostart.ps1` registers a scheduled task that starts the server 30 s after every boot, before anybody has logged on (installed once from an elevated PowerShell; it asks for and validates the Windows password of the account that runs the server, which Task Scheduler needs for a task that runs while nobody is logged on; `-Status`, `-Remove`). A boot-time task has no desktop: no console window, and Windows may refuse Bluetooth/USB to such a session - the manual says how to check and what to do then.
+
 ### 2.1.0
 - **History / Sources / Source conditions:** the *Shore Power AC voltage* chart now also shows the **shore current** on a right-hand axis (0-20 A in steps of 5 A); the voltage keeps the left axis.
 - **History / Sources: new section *Shore power intake*** with a line of the power (W) taken in from shore power over the selected period, and underneath **Total kWh intake over the selected period** with the average power and how much of the period was recorded. The total is the time integral of the shore power over the full-resolution history, summed on the server (`GET /api/history/contributions` has a new `shore` entry: `wh`, `avg_w`); the browser only displays it. The chart points now carry `shore_current` and `shore_power` (read from the stored dashboard samples, so the whole history shows them after a restart).

@@ -1,6 +1,6 @@
 # Mastervolt Energy - Manual
 
-**Version 2.1.0** - the complete guide to using, operating and maintaining the application. It explains what every screen
+**Version 2.1.1** - the complete guide to using, operating and maintaining the application. It explains what every screen
 shows, how every number is obtained, what the application does on its own (Float protection, Bluetooth recovery, history),
 which files it keeps, what to do when something goes wrong, and how the code is organised for whoever changes it next.
 
@@ -136,6 +136,16 @@ Everything the application logs appears there. Stop it with **Ctrl+C**.
   is stuck shutting down (an open browser connection can hold it); end the process and start it again. The launcher already limits
   that wait (`--timeout-graceful-shutdown 5`).
 * `run.ps1` starts a plain-HTTP development server on all interfaces. Use it only on a trusted network.
+
+**Starting automatically when the PC boots.** `tools\install_autostart.ps1` registers a scheduled task that starts the server 30 seconds
+after every boot, before anybody has logged on. Run it once from an **elevated** PowerShell (Run as administrator) in the folder the
+server runs from; it asks for the Windows password of the account that runs the server and checks it before changing anything.
+The account matters: Python and its packages are installed for one user, so only that user can run the server. The password goes
+to Task Scheduler, which stores it protected; the script saves it nowhere. `-Status` shows the task and whether the server answers,
+`-Remove` removes the task. Two limits: a boot-time task has no desktop, so there is no console window (look at `logs\`), and Windows
+may refuse Bluetooth or USB access to a session without a desktop - after the first reboot check that the BMS page shows the
+batteries connected. If it does not, remove the task and start the server at log-on instead (a task with an *At log on* trigger, or a
+shortcut in the Startup folder).
 
 Before the first start after changing control code, check the mappings:
 
@@ -720,6 +730,7 @@ All run from the project folder with the server **stopped**; the read-only ones 
 | `py -m tools.capture_hid --seconds 30` | print the raw HID reports from the Link (read-only) |
 | `py -m tools.reversible_write_test <device> --confirm-write` | **writes**: switches a charger, the ECU or Solar to the opposite state, verifies, restores |
 | `py -m tools.cache_product_images [--force]` | download the tile photos into `static/products/` |
+| `tools\install_autostart.ps1` | register (or `-Remove`, `-Status`) the scheduled task that starts the server at boot; needs an elevated PowerShell |
 | `tools\find_masterbus_usb.ps1`, `tools\ecu_capture_session.ps1` | find the USB Link; guided USBPcap capture of MasterAdjust |
 
 ---
